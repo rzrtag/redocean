@@ -4,6 +4,7 @@
 pathlib2>=2.3.7
 urllib3>=2.0.0
 requests>=2.31.0
+click>=8.0.0
 
 # Data processing
 pandas>=2.0.0
