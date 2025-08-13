@@ -1,0 +1,81 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "editor.fontFamily": "'Iosevka Nerd Font'",
+        "editor.fontSize": 13,
+        "editor.fontLigatures": true,
+        "editor.fontWeight": "400",
+        "terminal.integrated.fontFamily": "'Iosevka Nerd Font'",
+        "terminal.integrated.fontSize": 12,
+
+        // Editor preferences
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false,
+        "editor.rulers": [],
+        "editor.minimap.enabled": false,
+        "editor.wordWrap": "off",
+        "editor.renderWhitespace": "none",
+
+        // Tree/Explorer preferences
+        "workbench.tree.indent": 20,
+        "workbench.tree.renderIndentGuides": "always",
+        "explorer.compactFolders": false,
+
+        // Tab preferences
+        "workbench.editor.showTabs": "multiple",
+        "workbench.editor.tabSizing": "shrink",
+        "workbench.editor.enablePreview": false,
+        "workbench.editor.enablePreviewFromQuickOpen": false,
+        "workbench.editor.closeEmptyGroups": false,
+        "workbench.editor.openPositioning": "right",
+        "workbench.editor.focusMode": "off",
+
+        // File preferences
+        "files.exclude": {
+            "**/__pycache__": true,
+            "**/*.pyc": true,
+            "**/.pytest_cache": true,
+            "**/.coverage": true,
+            "**/htmlcov": true,
+            "**/.mypy_cache": true
+        },
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true,
+        "files.autoSave": "onFocusChange",
+
+        // Python configuration
+        "python.defaultInterpreterPath": "/home/sword_system_vm/miniconda3/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": false,
+        "python.linting.flake8Enabled": true,
+        "python.formatting.provider": "black",
+        "python.sortImports.args": ["--profile", "black"],
+
+        // Workspace persistence
+        "workbench.settings.enableNaturalLanguageSearch": false,
+        "workbench.settings.useSplitJSON": false,
+        "workbench.editor.restoreViewState": true,
+
+        // UI preferences
+        "workbench.startupEditor": "none",
+        "workbench.statusBar.visible": false,
+        "workbench.sideBar.visible": true
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "ms-python.black-formatter",
+            "ms-python.flake8",
+            "ms-python.isort",
+            "ms-python.pylint",
+            "ms-toolsai.jupyter",
+            "ms-vscode.vscode-json"
+        ]
+    }
+}
