@@ -48,14 +48,24 @@
         "files.insertFinalNewline": true,
         "files.autoSave": "onFocusChange",
 
-        // Python configuration
-        "python.defaultInterpreterPath": "/home/sword_system_vm/miniconda3/bin/python",
+        // Python configuration - Auto-activate conda environment
+        "python.defaultInterpreterPath": "/mnt/storage_fast/workspaces_2/red_ocean/.conda/bin/python",
         "python.terminal.activateEnvironment": true,
+        "python.terminal.activateEnvInCurrentTerminal": true,
         "python.linting.enabled": true,
         "python.linting.pylintEnabled": false,
         "python.linting.flake8Enabled": true,
         "python.formatting.provider": "black",
         "python.sortImports.args": ["--profile", "black"],
+
+        // Terminal configuration - Auto-activate conda environment
+        "terminal.integrated.env.linux": {
+            "PYTHONPATH": "/mnt/storage_fast/workspaces/red_ocean/src"
+        },
+        "terminal.integrated.shellArgs.linux": [
+            "-c",
+            "source /home/sword_system/miniconda3/etc/profile.d/conda.sh && conda activate /mnt/storage_fast/workspaces_2/red_ocean/.conda && export PYTHONPATH=/mnt/storage_fast/workspaces/red_ocean/src && exec zsh"
+        ],
 
         // Workspace persistence
         "workbench.settings.enableNaturalLanguageSearch": false,
