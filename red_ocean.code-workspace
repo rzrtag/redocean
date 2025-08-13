@@ -49,7 +49,7 @@
         "files.autoSave": "onFocusChange",
 
         // Python configuration - Auto-activate conda environment
-        "python.defaultInterpreterPath": "/mnt/storage_fast/workspaces_2/red_ocean/.conda/bin/python",
+        "python.defaultInterpreterPath": "/home/sword_system/miniconda3/envs/red_ocean/bin/python",
         "python.terminal.activateEnvironment": true,
         "python.terminal.activateEnvInCurrentTerminal": true,
         "python.linting.enabled": true,
@@ -64,7 +64,7 @@
         },
         "terminal.integrated.shellArgs.linux": [
             "-c",
-            "source /home/sword_system/miniconda3/etc/profile.d/conda.sh && conda activate /mnt/storage_fast/workspaces_2/red_ocean/.conda && export PYTHONPATH=/mnt/storage_fast/workspaces/red_ocean/src && exec zsh"
+            "source /home/sword_system/miniconda3/etc/profile.d/conda.sh && conda activate red_ocean && export PYTHONPATH=/mnt/storage_fast/workspaces/red_ocean/src && exec zsh"
         ],
 
         // Workspace persistence
