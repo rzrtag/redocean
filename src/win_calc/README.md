@@ -20,4 +20,9 @@ Site-agnostic adjustment engine that blends SaberSim median projections with MLB
 ## CLI (planned)
 - `python src/win_calc/run_adj.py --site draftkings --date 0813 --slate main_slate --export`
 
+## Utilities
+- `starters.py`: load starter pitchers and batter starters (bat_order_visible > 0) for a site/slate.
+- `platforms.py`: DK/FD metadata (salary cap, roster slots, CSV headers, upload filename).
+- `exporter.py`: write per-site upload CSVs using platform metadata.
+
 This module is designed to be parameterized so we can iterate on weights and caps quickly.
