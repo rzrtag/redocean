@@ -147,3 +147,18 @@ Notes:
 ### Deprecations and Caveats
 - `starters.json` is deprecated and will no longer be generated; rely on `games.json` (home/away starters) and lineup/players tables (`bat_order_visible > 0`) for starter inference.
 - Extraction and analysis tables are improving: while we’ve structured the HAR extraction to be augmentation-friendly and aligned with upload schemas, some tables/analyses may still evolve. Expect iterative refinements to naming, coverage, and derived fields.
+
+## Starter Identification Sources (Daily Contests)
+We only analyze starters (bench excluded).
+
+- Pitchers (projected/confirmed)
+  - Primary: `_data/sabersim_2025/<site>/<mmdd>_<slate>/atoms_output/tables/starters.json` (contains projected and/or confirmed SPs).
+  - Fallback: `games.json` (`home_starter`/`away_starter`) when needed.
+- Batters (projected/confirmed)
+  - Use `players.json`; treat players with `bat_order_visible > 0` as starters (projected if not yet confirmed).
+  - The `confirmed` flag in `players.json` indicates lineup confirmation when available.
+
+Rules:
+- Exclude any player with `bat_order_visible == 0` (bench).
+- Prefer confirmed data when present; otherwise, proceed with projected starters until updated.
+- Rookie/call-up pathway: still no adjustment if insufficient history (per MVP rules).
