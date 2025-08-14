@@ -1,222 +1,163 @@
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Dict, Optional, Any
 import json
-import logging
-
-logger = logging.getLogger(__name__)
-
-BASE_DATA = Path("/mnt/storage_fast/workspaces/red_ocean/_data")
-ROLLING_DATA = (BASE_DATA / "mlb_api_2025" /
-                "rolling_windows" / "data")
-
-# Import our new histogram calculator
-from .histogram_calculator import HistogramCalculator
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 
-class RollingAdjuster:
-    """Calculate rolling window adjustments for SaberSim projections."""
+# Defaults (tunable)
+WEIGHTS = {"50": 0.5, "100": 0.3, "250": 0.2}
+AGGRESSIVENESS_K = 0.15
+MAX_ABS_TILT = 0.20
+LEAGUE_XWOBA_HITTER = 0.320
+LEAGUE_XWOBA_PITCHER_ALLOWED = 0.320
 
-    def __init__(self):
-        self.hitters_dir = ROLLING_DATA / "hitters"
-        self.pitchers_dir = ROLLING_DATA / "pitchers"
-        self.histogram_calculator = HistogramCalculator()
+ROLLING_ROOT = "/mnt/storage_fast/workspaces/red_ocean/_data/mlb_api_2025/rolling_windows/data"
+ROSTERS_PATH = "/mnt/storage_fast/workspaces/red_ocean/_data/mlb_api_2025/active_rosters/data/active_rosters.json"
 
-    def load_player_rolling_data(self, player_id: str, player_type: str) -> Optional[Dict[str, Any]]:
-        """Load rolling window data for a specific player."""
-        try:
-            if player_type == "hitter":
-                data_file = self.hitters_dir / f"{player_id}.json"
-            else:
-                data_file = self.pitchers_dir / f"{player_id}.json"
 
-            if not data_file.exists():
-                logger.warning(f"No rolling data found for {player_type} {player_id}")
-                return None
+def _normalize_name(name: str) -> str:
+	name = name.lower().strip()
+	name = re.sub(r"[\.'`’]", "", name)
+	name = re.sub(r"\s+jr$", "", name)
+	name = re.sub(r"\s+sr$", "", name)
+	name = re.sub(r"\s+ii$|\s+iii$|\s+iv$", "", name)
+	name = re.sub(r"\s+", " ", name)
+	return name
 
-            with open(data_file, 'r') as f:
-                return json.load(f)
 
-        except Exception as e:
-            logger.error(f"Error loading rolling data for {player_type} {player_id}: {e}")
-            return None
+def _load_active_rosters() -> Dict[str, Any]:
+	try:
+		with open(ROSTERS_PATH, "r") as f:
+			return json.load(f)
+	except Exception:
+		return {}
 
-    def calculate_hitter_adjustment(self, player_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate adjustment for hitter based on rolling xwOBA trends across event-based windows."""
-        try:
-            multi_window = player_data.get("multi_window_data", {})
 
-            # Define window weights (50 events gets highest weight - most recent)
-            window_weights = {
-                "50": 0.5,   # 50% weight for most recent 50 events
-                "100": 0.3,  # 30% weight for medium-term 100 events
-                "250": 0.2   # 20% weight for long-term 250 events
-            }
+def _build_name_index(rosters: Dict[str, Any]) -> Dict[Tuple[str, str], str]:
+	index: Dict[Tuple[str, str], str] = {}
+	for team_abbr, team_data in rosters.get("rosters", {}).items():
+		for p in team_data.get("roster", []):
+			full = p.get("fullName") or ""
+			pid = p.get("id")
+			if not full or pid is None:
+				continue
+			index[(_normalize_name(full), team_abbr.upper())] = str(pid)
+	return index
 
-            adjustments = []
-            total_weight = 0
 
-            for window_size, weight in window_weights.items():
-                window_data = multi_window.get(window_size, {})
-                if not window_data:
-                    continue
+def _load_rolling_file(player_id: str, role: str) -> Optional[Dict[str, Any]]:
+	path = os.path.join(ROLLING_ROOT, "hitters" if role == "batter" else "pitchers", f"{player_id}.json")
+	if not os.path.exists(path):
+		return None
+	try:
+		with open(path, "r") as f:
+			return json.load(f)
+	except Exception:
+		return None
 
-                series = window_data.get("series", [])
-                if len(series) < 5:  # Need at least 5 events for meaningful trend
-                    continue
 
-                # For event-based windows, analyze trend across the series
-                # Recent events are at the beginning of the series (most recent first)
-                recent_events = series[:min(10, len(series)//2)]  # First 10 events or half
-                older_events = series[-min(10, len(series)//2):]  # Last 10 events or half
+def _latest_xwoba(rolling: Dict[str, Any], window: str) -> Optional[float]:
+	series = (rolling.get("rolling_windows", {}).get(window, {}) or {}).get("series", [])
+	if not series:
+		return None
+	# Assume first entry is most recent
+	val = series[0].get("xwoba")
+	return float(val) if isinstance(val, (int, float)) else None
 
-                if len(recent_events) < 3 or len(older_events) < 3:
-                    continue
 
-                recent_xwoba = sum(e.get("xwoba", 0) for e in recent_events) / len(recent_events)
-                older_xwoba = sum(e.get("xwoba", 0) for e in older_events) / len(older_events)
+def _compute_signal(role: str, rolling: Dict[str, Any], weights: Dict[str, float], league_h: float, league_p: float) -> Optional[float]:
+	# Build weighted deviation from league average
+	acc = 0.0
+	weight_sum = 0.0
+	for w_key, w in weights.items():
+		x = _latest_xwoba(rolling, w_key)
+		if x is None:
+			continue
+		league = league_h if role == "batter" else league_p
+		# Relative difference
+		d = (x - league) / league if league else 0.0
+		# For pitchers, lower xwOBA allowed is better → invert sign
+		if role == "pitcher":
+			d = -d
+		acc += w * d
+		weight_sum += w
+	if weight_sum == 0.0:
+		return None
+	return acc / weight_sum
 
-                # Calculate adjustment as percentage change
-                if older_xwoba > 0:
-                    trend_pct = (recent_xwoba - older_xwoba) / older_xwoba
-                else:
-                    trend_pct = 0.0
 
-                # Apply confidence based on event sample size
-                confidence = min(1.0, len(series) / int(window_size))
+def _apply_adjustment(base_proj: Optional[float], signal: float, k: float, cap: float) -> Optional[float]:
+	if base_proj is None:
+		return None
+	# Capped multiplier
+	factor = k * signal
+	if factor > cap:
+		factor = cap
+	elif factor < -cap:
+		factor = -cap
+	return base_proj * (1.0 + factor)
 
-                # Weighted adjustment
-                weighted_adj = trend_pct * confidence * weight
-                adjustments.append(weighted_adj)
-                total_weight += weight
 
-            if not adjustments:
-                return {"adjustment": 0.0, "confidence": 0.0, "reason": "No valid event window data"}
+def adjust_records(
+	site: str,
+	batters: List[Dict[str, Any]],
+	pitchers: List[Dict[str, Any]],
+	w50: Optional[float] = None,
+	w100: Optional[float] = None,
+	w250: Optional[float] = None,
+	k: Optional[float] = None,
+	cap: Optional[float] = None,
+	league_xwoba_hitter: Optional[float] = None,
+	league_xwoba_pitcher: Optional[float] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+	"""Return new lists with my_proj adjusted based on rolling windows.
 
-            # Calculate weighted average adjustment
-            avg_adjustment = sum(adjustments) / total_weight if total_weight > 0 else 0.0
+	Adds fields per record:
+	- rolling_signal: weighted deviation metric used
+	- my_proj_adj: adjusted projection
+	- my_proj: overwritten with adjusted value for CSV export convenience
+	"""
+	# Use provided overrides or defaults
+	weights = {
+		"50": WEIGHTS.get("50") if w50 is None else float(w50),
+		"100": WEIGHTS.get("100") if w100 is None else float(w100),
+		"250": WEIGHTS.get("250") if w250 is None else float(w250),
+	}
+	use_k = AGGRESSIVENESS_K if k is None else float(k)
+	use_cap = MAX_ABS_TILT if cap is None else float(cap)
+	league_h = LEAGUE_XWOBA_HITTER if league_xwoba_hitter is None else float(league_xwoba_hitter)
+	league_p = LEAGUE_XWOBA_PITCHER_ALLOWED if league_xwoba_pitcher is None else float(league_xwoba_pitcher)
 
-            # Cap adjustment at ±5% for MVP
-            capped_adjustment = max(-0.05, min(0.05, avg_adjustment * 0.5))
+	rosters = _load_active_rosters()
+	name_index = _build_name_index(rosters)
 
-            # Overall confidence based on available windows
-            overall_confidence = min(1.0, total_weight)
+	def _adjust_list(records: List[Dict[str, Any]], role: str) -> List[Dict[str, Any]]:
+		adjusted: List[Dict[str, Any]] = []
+		for r in records:
+			name = _normalize_name(str(r.get("name") or ""))
+			team = str(r.get("team") or "").upper()
+			mlb_id = name_index.get((name, team))
+			if not mlb_id:
+				adjusted.append(r)
+				continue
+			rolling = _load_rolling_file(mlb_id, role)
+			if not rolling:
+				adjusted.append(r)
+				continue
+			signal = _compute_signal(role, rolling, weights, league_h, league_p)
+			if signal is None:
+				adjusted.append(r)
+				continue
+			base_proj = r.get("my_proj")
+			adj = _apply_adjustment(base_proj, signal, use_k, use_cap)
+			if adj is None:
+				adjusted.append(r)
+				continue
+			new_r = dict(r)
+			new_r["rolling_signal"] = signal
+			new_r["my_proj_adj"] = adj
+			new_r["my_proj"] = adj
+			adjusted.append(new_r)
+		return adjusted
 
-            return {
-                "adjustment": capped_adjustment,
-                "confidence": overall_confidence,
-                "windows_used": len(adjustments),
-                "total_weight": total_weight,
-                "reason": f"Multi-event trend: {capped_adjustment:.1%} adjustment using {len(adjustments)} event windows"
-            }
-
-        except Exception as e:
-            logger.error(f"Error calculating hitter adjustment: {e}")
-            return {"adjustment": 0.0, "confidence": 0.0, "reason": f"Calculation error: {e}"}
-
-    def calculate_pitcher_adjustment(self, player_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate adjustment for pitcher based on rolling performance trends across event-based windows."""
-        try:
-            multi_window = player_data.get("multi_window_data", {})
-
-            # Define window weights (50 events gets highest weight - most recent)
-            window_weights = {
-                "50": 0.5,   # 50% weight for most recent 50 events
-                "100": 0.3,  # 30% weight for medium-term 100 events
-                "250": 0.2   # 20% weight for long-term 250 events
-            }
-
-            adjustments = []
-            total_weight = 0
-
-            for window_size, weight in window_weights.items():
-                window_data = multi_window.get(window_size, {})
-                if not window_data:
-                    continue
-
-                series = window_data.get("series", [])
-                if len(series) < 5:
-                    continue
-
-                # For pitchers, we want to see if they're improving (lower xwOBA = better)
-                # Recent events are at the beginning of the series (most recent first)
-                recent_events = series[:min(10, len(series)//2)]
-                older_events = series[-min(10, len(series)//2):]
-
-                if len(recent_events) < 3 or len(older_events) < 3:
-                    continue
-
-                recent_xwoba = sum(e.get("xwoba", 0) for e in recent_events) / len(recent_events)
-                older_xwoba = sum(e.get("xwoba", 0) for e in older_events) / len(older_events)
-
-                # For pitchers: improving = lower xwOBA, so we invert the trend
-                if older_xwoba > 0:
-                    trend_pct = (older_xwoba - recent_xwoba) / older_xwoba  # Inverted for pitchers
-                else:
-                    trend_pct = 0.0
-
-                # Apply confidence based on event sample size
-                confidence = min(1.0, len(series) / int(window_size))
-
-                # Weighted adjustment
-                weighted_adj = trend_pct * confidence * weight
-                adjustments.append(weighted_adj)
-                total_weight += weight
-
-            if not adjustments:
-                return {"adjustment": 0.0, "confidence": 0.0, "reason": "No valid event window data"}
-
-            # Calculate weighted average adjustment
-            avg_adjustment = sum(adjustments) / total_weight if total_weight > 0 else 0.0
-
-            # Cap adjustment at ±5% for MVP
-            capped_adjustment = max(-0.05, min(0.05, avg_adjustment * 0.5))
-
-            # Overall confidence based on available windows
-            overall_confidence = min(1.0, total_weight)
-
-            return {
-                "adjustment": capped_adjustment,
-                "confidence": overall_confidence,
-                "windows_used": len(adjustments),
-                "total_weight": total_weight,
-                "reason": f"Multi-event trend: {capped_adjustment:.1%} adjustment using {len(adjustments)} event windows"
-            }
-
-        except Exception as e:
-            logger.error(f"Error calculating pitcher adjustment: {e}")
-            return {"adjustment": 0.0, "confidence": 0.0, "reason": f"Calculation error: {e}"}
-
-    def get_adjustment(self, player_id: str, player_type: str) -> Dict[str, Any]:
-        """Get rolling window adjustment for a player."""
-        player_data = self.load_player_rolling_data(player_id, player_type)
-        if not player_data:
-            return {"adjustment": 0.0, "confidence": 0.0, "reason": "No rolling data available"}
-
-        if player_type == "hitter":
-            return self.calculate_hitter_adjustment(player_data)
-        else:
-            return self.calculate_pitcher_adjustment(player_data)
-
-    def check_histogram_availability(self, player_id: str, player_type: str) -> Dict[str, Any]:
-        """Check what histogram data is available for a player using our Statcast data."""
-        # Convert player_type to match Statcast data format
-        statcast_type = "batter" if player_type == "hitter" else player_type
-        # Use our new histogram calculator instead of rolling windows data
-        histograms = self.histogram_calculator.get_player_histograms(player_id, statcast_type)
-        
-        # Check what histogram types are available
-        available_types = {}
-        for hist_type, hist_data in histograms.items():
-            if isinstance(hist_data, list) and len(hist_data) > 0:
-                available_types[hist_type] = len(hist_data)
-            else:
-                available_types[hist_type] = 0
-        
-        return {
-            "available": any(count > 0 for count in available_types.values()),
-            "histogram_types": available_types,
-            "total_types": len(available_types),
-            "reason": f"Found {sum(1 for c in available_types.values() if c > 0)}/{len(available_types)} histogram types with data from Statcast"
-        }
+	return _adjust_list(batters, "batter"), _adjust_list(pitchers, "pitcher")

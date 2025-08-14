@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import requests
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -25,12 +25,14 @@ class RollingWindowConfig:
     request_delay: float = 0.5
     timeout: int = 30
     retry_attempts: int = 3
+    season_year: int = 2025
 
 
 class EnhancedRollingCollector:
     """Enhanced rolling windows collector using Baseball Savant JSON endpoints"""
 
-    def __init__(self, data_dir: Path, performance_profile: str = "balanced"):
+    def __init__(self, data_dir: Path, performance_profile: str = "balanced",
+                 season_year: int = 2025):
         self.data_dir = Path(data_dir)
         self.hitters_dir = self.data_dir / "data" / "hitters"
         self.pitchers_dir = self.data_dir / "data" / "pitchers"
@@ -46,7 +48,10 @@ class EnhancedRollingCollector:
             "aggressive": RollingWindowConfig(max_workers=8, request_delay=0.2),
             "super_aggressive": RollingWindowConfig(max_workers=16, request_delay=0.1)
         }
+        # Base profile
         self.config = profiles.get(performance_profile, profiles["balanced"])
+        # Override season if provided
+        self.config.season_year = season_year
 
         # Baseball Savant endpoints
         self.rolling_url = "https://baseballsavant.mlb.com/player-services/rolling-thumb"
@@ -63,7 +68,8 @@ class EnhancedRollingCollector:
 
         logger.info(
             f"🚀 Rolling windows collector initialized with {performance_profile} "
-            f"profile: {self.config.max_workers} workers, {self.config.request_delay}s delay"
+            f"profile: {self.config.max_workers} workers, {self.config.request_delay}s delay, "
+            f"season={self.config.season_year}"
         )
 
     def collect_all_players(self, player_ids: List[str],
@@ -79,27 +85,39 @@ class EnhancedRollingCollector:
         }
 
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
-            futures = []
+            futures = {}
 
+            # submit with gentle pacing to avoid bursty traffic
             for player_id in player_ids:
                 for player_type in player_types:
-                    future = executor.submit(self._collect_single_player,
-                                           player_id, player_type)
-                    futures.append((future, player_id, player_type))
+                    fut = executor.submit(
+                        self._collect_single_player, player_id, player_type
+                    )
+                    futures[fut] = (player_id, player_type)
+                    time.sleep(self.config.request_delay)
 
-            for future, player_id, player_type in futures:
+            # process completions as they finish to avoid head-of-line blocking
+            for fut in as_completed(futures):
+                player_id, player_type = futures[fut]
                 try:
-                    result = future.result()
-                    if result["success"]:
-                        results["success"].append(f"{player_id}_{player_type}")
+                    result = fut.result(timeout=self.config.timeout * 2)
+                    if result.get("skipped"):
+                        results["skipped"].append(
+                            f"{player_id}_{player_type}"
+                        )
+                    elif result.get("success"):
+                        results["success"].append(
+                            f"{player_id}_{player_type}"
+                        )
                     else:
                         results["failed"].append(
-                            f"{player_id}_{player_type}: {result['error']}"
+                            f"{player_id}_{player_type}: "
+                            f"{result.get('error','unknown')}"
                         )
                 except Exception as e:
-                    results["failed"].append(f"{player_id}_{player_type}: {str(e)}")
-
-                time.sleep(self.config.request_delay)
+                    results["failed"].append(
+                        f"{player_id}_{player_type}: {str(e)}"
+                    )
 
         logger.info(
             f"✅ Collection complete: {len(results['success'])} success, "
@@ -117,8 +135,22 @@ class EnhancedRollingCollector:
             # Collect rolling windows data
             rolling_data = self._fetch_rolling_windows(player_id, pos_code)
             if not rolling_data:
-                return {"success": False,
-                       "error": "No rolling windows data available"}
+                return {
+                    "success": False,
+                    "skipped": True,
+                    "error": "No rolling windows data available",
+                }
+
+            # Skip writing empty files: ensure at least one window has data
+            def _series_len(win_key: str) -> int:
+                return len(rolling_data.get(win_key, {}).get("series", []))
+
+            if _series_len("50") == 0 and _series_len("100") == 0 and _series_len("250") == 0:
+                return {
+                    "success": False,
+                    "skipped": True,
+                    "error": "Empty rolling windows (no qualified events)",
+                }
 
             # Collect histogram data
             histogram_data = self._fetch_histogram_data(player_id, pos_code)
@@ -208,7 +240,7 @@ class EnhancedRollingCollector:
         return histogram_data
 
     def _fetch_single_histogram(self, player_id: str, pos_code: str,
-                               field_type: str) -> Optional[List[Dict[str, Any]]]:
+                                field_type: str) -> Optional[List[Dict[str, Any]]]:
         """Fetch a single histogram from Baseball Savant"""
         params = {
             'playerId': player_id,
@@ -216,7 +248,7 @@ class EnhancedRollingCollector:
             'fieldType': field_type,
             'hand': '',
             'size': '5',
-            'season': '',
+            'season': str(self.config.season_year),
             'event': 'pitch_count',
             'pitchType': ''
         }
@@ -237,8 +269,17 @@ class EnhancedRollingCollector:
         if not window_data:
             return {"series": [], "summary": {}}
 
-        series = []
+        # Filter to desired season year (keep only entries within the season)
+        season_str = str(self.config.season_year)
+        filtered = []
         for entry in window_data:
+            dt = entry.get("max_game_date", "")
+            year_ok = isinstance(dt, str) and dt[:4] == season_str
+            if year_ok:
+                filtered.append(entry)
+
+        series = []
+        for entry in filtered:
             series.append({
                 "xwoba": float(entry.get("xwoba", 0)),
                 "max_game_date": entry.get("max_game_date", ""),

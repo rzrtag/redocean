@@ -25,13 +25,13 @@ def run_step(cmd: list[str], title: str, timeout: int = 1800) -> bool:
     print(f"\n🚀 {title}")
     print(f"📄 Running: {' '.join(cmd)}")
     print(f"🕐 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
+
     start_time = time.time()
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         execution_time = time.time() - start_time
-        
+
         if result.returncode == 0:
             print(f"✅ {title} completed in {execution_time:.1f}s")
             if result.stdout.strip():
@@ -46,7 +46,7 @@ def run_step(cmd: list[str], title: str, timeout: int = 1800) -> bool:
                 for line in result.stderr.strip().split('\n'):
                     print(f"   {line}")
             return False
-            
+
     except subprocess.TimeoutExpired:
         print(f"⏰ {title} timed out after {timeout} seconds")
         return False
@@ -59,7 +59,7 @@ def check_pipeline_status():
     """Check status of SaberSim pipeline components."""
     print("🔍 SaberSim Pipeline Status Check")
     print("=" * 50)
-    
+
     # Check for recent HAR files
     har_root = Path("/mnt/storage_fast/workspaces/red_ocean/dfs_1")
     if har_root.exists():
@@ -71,7 +71,7 @@ def check_pipeline_status():
             print(f"⏰ Age: {har_age/3600:.1f} hours")
         else:
             print("⚠️ No HAR files found")
-    
+
     # Check for recent data
     data_root = Path("/mnt/storage_fast/workspaces/red_ocean/_data/sabersim_2025")
     if data_root.exists():
@@ -84,7 +84,7 @@ def check_pipeline_status():
                     if slate_dir.is_dir():
                         if latest_slate is None or slate_dir.stat().st_mtime > latest_slate.stat().st_mtime:
                             latest_slate = slate_dir
-                
+
                 if latest_slate:
                     data_age = time.time() - latest_slate.stat().st_mtime
                     print(f"📊 {site.title()}: {latest_slate.name} ({data_age/3600:.1f}h old)")
@@ -97,30 +97,38 @@ def check_pipeline_status():
 def run_sabersim_pipeline(har_file: str = None, force: bool = False):
     """Run the complete SaberSim pipeline."""
     start_time = time.time()
-    
+
     print("🚀 SaberSim Master Pipeline")
     print("=" * 50)
     print(f"🕐 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"🔄 Mode: {'FORCED UPDATE' if force else 'SMART INCREMENTAL'}")
-    
+
     # Build SaberSim pipeline command
     ss_cmd = ["python3", "src/sabersim/pipeline/run_all_sabersim.py"]
-    
+
     if har_file:
         ss_cmd.extend(["--har", har_file])
     if force:
         # Note: SaberSim doesn't have a --force flag yet, but we could add one
         print("⚠️ Force mode not yet implemented for SaberSim")
-    
+
     # Run SaberSim pipeline
     success = run_step(ss_cmd, "SaberSim Pipeline")
-    
+
+    # If SaberSim succeeded, run Win Calc to build adj + CSVs
+    if success:
+        win_calc_cmd = [
+            "python3",
+            "src/win_calc/pipeline/run_win_calc.py",
+        ]
+        success = run_step(win_calc_cmd, "Win Calc (Adj + CSV Export)") and success
+
     # Summary
     total_time = time.time() - start_time
     print(f"\n📊 Pipeline Summary")
     print("=" * 50)
     print(f"⏱️ Total Time: {total_time:.1f}s")
-    
+
     if success:
         print("✅ SaberSim pipeline completed successfully!")
         return True
@@ -135,9 +143,9 @@ def main():
     parser.add_argument('--har', type=str, help='Specific HAR file to process')
     parser.add_argument('--force', action='store_true', help='Force reprocess all data')
     parser.add_argument('--status', action='store_true', help='Check pipeline status')
-    
+
     args = parser.parse_args()
-    
+
     if args.status:
         check_pipeline_status()
         sys.exit(0)
