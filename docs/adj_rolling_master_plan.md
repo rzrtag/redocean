@@ -143,3 +143,7 @@ Notes:
   - Batters are considered projected/confirmed starters if `bat_order_visible > 0`.
   - Pitchers are implied via `games.json` (`home_starter`/`away_starter`) and confirmation flags elsewhere; treat implied as starters until proven otherwise.
 - These artifacts refresh as lineups confirm; ADJ should tolerate projected status and update when confirmations arrive.
+
+### Deprecations and Caveats
+- `starters.json` is deprecated and will no longer be generated; rely on `games.json` (home/away starters) and lineup/players tables (`bat_order_visible > 0`) for starter inference.
+- Extraction and analysis tables are improving: while we’ve structured the HAR extraction to be augmentation-friendly and aligned with upload schemas, some tables/analyses may still evolve. Expect iterative refinements to naming, coverage, and derived fields.
