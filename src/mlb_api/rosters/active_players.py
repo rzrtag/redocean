@@ -7,6 +7,7 @@ Collects and manages active MLB player data.
 
 from typing import Dict, Any, List, Optional
 from .rosters_collector import ActiveRostersCollector
+from unidecode import unidecode
 
 
 class ActivePlayersCollector:
@@ -26,6 +27,13 @@ class ActivePlayersCollector:
         active_players = []
         for team_abbr, team_data in roster_data.get('rosters', {}).items():
             for player in team_data.get('roster', []):
+                # Ensure ascii name fields exist for downstream matching
+                if 'fullName_ascii' not in player and 'fullName' in player:
+                    player['fullName_ascii'] = unidecode(player['fullName'])
+                if 'firstName_ascii' not in player and 'firstName' in player:
+                    player['firstName_ascii'] = unidecode(player['firstName'])
+                if 'lastName_ascii' not in player and 'lastName' in player:
+                    player['lastName_ascii'] = unidecode(player['lastName'])
                 player['team_abbr'] = team_abbr
                 active_players.append(player)
 

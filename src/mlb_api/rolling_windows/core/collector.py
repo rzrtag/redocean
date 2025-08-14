@@ -46,7 +46,7 @@ class EnhancedRollingCollector:
             "conservative": RollingWindowConfig(max_workers=2, request_delay=1.0),
             "balanced": RollingWindowConfig(max_workers=4, request_delay=0.5),
             "aggressive": RollingWindowConfig(max_workers=8, request_delay=0.2),
-            "super_aggressive": RollingWindowConfig(max_workers=16, request_delay=0.1)
+            "super_aggressive": RollingWindowConfig(max_workers=20, request_delay=0.005)
         }
         # Base profile
         self.config = profiles.get(performance_profile, profiles["balanced"])

@@ -14,27 +14,23 @@ from typing import Dict, Any, Tuple, Optional, Union, List
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+from unidecode import unidecode
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from shared.incremental_updater import MLBAPICollector
 from shared.config import MLBConfig
 
 
-class ActiveRostersCollector(MLBAPICollector):
-    """Collects active MLB rosters with incremental update support using shared components."""
+class ActiveRostersCollector:
+    """Collects active MLB rosters and writes a single JSON artifact (no hash/cache)."""
 
     def __init__(self, max_workers: int = 5, request_delay: float = 0.05):
         """Initialize the collector with shared configuration."""
-        # Initialize shared configuration
+        # Initialize configuration
         self.config = MLBConfig.from_env()
-
-        # Initialize the parent MLBAPICollector
-        super().__init__("active_rosters", str(self.config.base_data_path))
-
-        # Set performance settings
-        self.set_performance_settings(max_workers, request_delay)
+        self.max_workers = max_workers
+        self.request_delay = request_delay
 
         # API endpoints using shared configuration
         self.teams_endpoint = f"{self.config.mlb_api_base_url}/teams"
@@ -44,32 +40,8 @@ class ActiveRostersCollector(MLBAPICollector):
         self.config.ensure_directories()
 
     def collect_data(self) -> Union[Dict, List]:
-        """Implement the required collect_data method for MLBAPICollector."""
-        print("📡 Collecting roster data...")
-
-        # Start collection
-        start_time = time.time()
-
-        # Collect roster data
-        roster_data = self._collect_all_rosters()
-
-        # Add metadata
-        collection_time = time.time() - start_time
-        roster_data['metadata'] = {
-            'collection_timestamp': datetime.now().isoformat(),
-            'season': 2025,
-            'total_teams': len(roster_data.get('teams', [])),
-            'total_players': sum(len(team.get('roster', [])) for team in roster_data.get('rosters', {}).values()),
-            'collector_version': '1.0.0',
-            'collector_name': 'active_rosters',
-            'performance': {
-                'max_workers': self.max_workers,
-                'request_delay': self.request_delay,
-                'collection_time_seconds': collection_time
-            }
-        }
-
-        return roster_data
+        """Backwards-compat wrapper; collect all and return dataset."""
+        return self.collect_all_teams()
 
     def _collect_all_rosters(self) -> Dict[str, Any]:
         """Collect rosters for all MLB teams."""
@@ -160,7 +132,7 @@ class ActiveRostersCollector(MLBAPICollector):
             team_id = team['id']
             response = requests.get(
                 self.roster_endpoint.format(team_id=team_id),
-                params={'rosterType': 'active'},  # Active roster only
+                params={'rosterType': 'active', 'season': 2025, 'hydrate': 'person'},  # Active roster only
                 timeout=30
             )
             response.raise_for_status()
@@ -191,11 +163,18 @@ class ActiveRostersCollector(MLBAPICollector):
                         position_abbr = pos_str
                         position_name = pos_str
 
+                # Preserve official name fields and add normalized variants
+                full_name = player['person']['fullName']
+                first_name = player['person'].get('firstName', '')
+                last_name = player['person'].get('lastName', '')
                 player_info = {
                     'id': player['person']['id'],
-                    'fullName': player['person']['fullName'],
-                    'firstName': player['person'].get('firstName', ''),
-                    'lastName': player['person'].get('lastName', ''),
+                    'fullName': full_name,
+                    'firstName': first_name,
+                    'lastName': last_name,
+                    'fullName_ascii': unidecode(full_name),
+                    'firstName_ascii': unidecode(first_name),
+                    'lastName_ascii': unidecode(last_name),
                     'primaryNumber': player.get('jerseyNumber', ''),
                     'birthDate': player['person'].get('birthDate', ''),
                     'height': player['person'].get('height', ''),
@@ -268,31 +247,42 @@ class ActiveRostersCollector(MLBAPICollector):
             'players_by_team': team_counts
         }
 
+    # --- Simplified non-incremental helpers ---
+    def write_json(self, data: Dict[str, Any]) -> Path:
+        out_path = self.config.active_rosters_path / 'data' / 'active_rosters.json'
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, 'w') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return out_path
+
+    def collect_all_teams(self) -> Dict[str, Any]:
+        """Bypass incremental system: collect and write a single artifact now."""
+        start_time = time.time()
+        print("📡 Collecting roster data (non-incremental)...")
+        data = self._collect_all_rosters()
+        data['metadata'] = {
+            'collection_timestamp': datetime.now().isoformat(),
+            'season': 2025,
+            'total_teams': len(data.get('teams', [])),
+            'total_players': sum(len(team.get('roster', [])) for team in data.get('rosters', {}).values()),
+            'collector_name': 'active_rosters',
+            'performance': {
+                'max_workers': self.max_workers,
+                'request_delay': self.request_delay,
+                'collection_time_seconds': time.time() - start_time,
+            }
+        }
+        path = self.write_json(data)
+        print(f"💾 Wrote rosters to {path}")
+        return data
+
     def run_collection(self, force_update: bool = False) -> Tuple[bool, Union[Dict, List], str]:
-        """Run the roster collection process using shared incremental update logic."""
+        """Compatibility shim; always collect now."""
         try:
-            # Use the parent class's run_collection method
-            was_updated, data, reason = super().run_collection(force_update)
-
-            if was_updated:
-                print(f"✅ Data updated: {reason}")
-                print(f"📊 Collected {data['metadata']['total_players']} players from {data['metadata']['total_teams']} teams")
-
-                # Show performance info
-                performance = data['metadata'].get('performance', {})
-                if performance:
-                    print(f"⚡ Collection time: {performance.get('collection_time_seconds', 'N/A'):.2f} seconds")
-                    print(f"⚡ Workers used: {performance.get('max_workers', 'N/A')}")
-                    print(f"⚡ Request delay: {performance.get('request_delay', 'N/A')}s")
-            else:
-                print(f"ℹ️  No update needed: {reason}")
-
-            return was_updated, data, reason
-
+            data = self.collect_all_teams()
+            return True, data, 'collected'
         except Exception as e:
-            error_msg = f"Collection failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            return False, None, error_msg
+            return False, None, str(e)
 
     def get_roster_summary(self) -> Dict[str, Any]:
         """Get a summary of the collected roster data using shared components."""
@@ -324,5 +314,4 @@ class ActiveRostersCollector(MLBAPICollector):
             return {'error': str(e)}
 
     def force_update(self) -> Tuple[bool, Optional[Dict[str, Any]], str]:
-        """Force an update regardless of hash status using shared components."""
         return self.run_collection(force_update=True)
