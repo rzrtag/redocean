@@ -601,12 +601,238 @@ class EnhancedRollingCollector(MLBAPICollector):
             return None
 
     def _fetch_histogram_data(self, player_id: str, player_type: str) -> Dict[str, Any]:
-        """Fetch histogram data from Baseball Savant."""
-
-        # This is a complex API call - for now, return comprehensive fallback
-        # In production, you'd implement the full histogram API calls
-        logger.debug(f"📊 Collecting histogram data for {player_id}")
-
+        """Fetch histogram data by processing raw Statcast data."""
+        
+        logger.debug(f"📊 Collecting histogram data for {player_type} {player_id}")
+        
+        # Baseball Savant Statcast endpoint
+        base_url = "https://baseballsavant.mlb.com/statcast_search/csv"
+        
+        histogram_data = {}
+        
+        try:
+            # Fetch raw Statcast data for the player
+            params = {
+                'all': 'true',
+                'hfSea': '2025%7C',
+                'type': 'details',
+                'rolling_window': '50'  # Use 50-event window
+            }
+            
+            if player_type == 'hitters':
+                params['batters_lookup[]'] = player_id
+                params['player_type'] = 'batter'
+            else:
+                params['pitchers_lookup[]'] = player_id
+                params['player_type'] = 'pitcher'
+            
+            response = self.session.get(base_url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            # Process raw data into histograms
+            if response.text.strip():
+                histogram_data = self._process_raw_data_to_histograms(response.text, player_type)
+            else:
+                logger.warning(f"No raw Statcast data for {player_id}")
+                histogram_data = self._generate_fallback_histograms(player_id, player_type)
+            
+            # Respect rate limiting
+            time.sleep(self.request_delay)
+            
+        except Exception as e:
+            logger.error(f"Error fetching histogram data for {player_id}: {e}")
+            histogram_data = self._generate_fallback_histograms(player_id, player_type)
+        
+        return histogram_data
+    
+    def _process_raw_data_to_histograms(self, csv_data: str, player_type: str) -> Dict[str, Any]:
+        """Process raw Statcast CSV data into histogram format."""
+        import csv
+        from io import StringIO
+        import numpy as np
+        
+        histogram_data = {}
+        
+        try:
+            csv_reader = csv.DictReader(StringIO(csv_data))
+            rows = list(csv_reader)
+            
+            if not rows:
+                logger.warning("No rows in CSV data")
+                return self._generate_fallback_histograms("unknown", player_type)
+            
+            logger.debug(f"Processing {len(rows)} raw Statcast rows into histograms")
+            
+            if player_type == 'hitters':
+                # Process hitter histograms
+                histogram_data = {
+                    "exit_velocity": self._create_exit_velocity_histogram(rows),
+                    "launch_angle": self._create_launch_angle_histogram(rows),
+                    "pitch_speed": self._create_pitch_speed_histogram(rows)
+                }
+            else:
+                # Process pitcher histograms
+                histogram_data = {
+                    "pitch_speed": self._create_pitcher_speed_histogram(rows),
+                    "spin_rate": self._create_spin_rate_histogram(rows)
+                }
+            
+        except Exception as e:
+            logger.error(f"Error processing raw data to histograms: {e}")
+            histogram_data = self._generate_fallback_histograms("unknown", player_type)
+        
+        return histogram_data
+    
+    def _create_exit_velocity_histogram(self, rows: List[Dict]) -> List[Dict[str, Any]]:
+        """Create exit velocity histogram from raw Statcast data."""
+        histogram = []
+        
+        # Extract exit velocities (hit_speed)
+        exit_velocities = []
+        for row in rows:
+            try:
+                ev = float(row.get('hit_speed', 0))
+                if ev > 0:  # Only include actual hits
+                    exit_velocities.append(ev)
+            except (ValueError, TypeError):
+                continue
+        
+        if not exit_velocities:
+            return []
+        
+        # Create histogram bins (80-110 mph in 2 mph increments)
+        bins = list(range(80, 112, 2))
+        hist, bin_edges = np.histogram(exit_velocities, bins=bins)
+        
+        total_pitches = len(rows)
+        
+        for i, count in enumerate(hist):
+            if count > 0:
+                bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+                histogram.append({
+                    "histogram_value": str(int(bin_center)),
+                    "pitch_count": str(count),
+                    "total_pitches": str(total_pitches),
+                    "ev": str(bin_center),
+                    "pitch_percent": str(round(count / total_pitches * 100, 1))
+                })
+        
+        return histogram
+    
+    def _create_launch_angle_histogram(self, rows: List[Dict]) -> List[Dict[str, Any]]:
+        """Create launch angle histogram from raw Statcast data."""
+        histogram = []
+        
+        # Extract launch angles (hit_angle)
+        launch_angles = []
+        for row in rows:
+            try:
+                la = float(row.get('hit_angle', 0))
+                if la != 0:  # Only include actual hits
+                    launch_angles.append(la)
+            except (ValueError, TypeError):
+                continue
+        
+        if not launch_angles:
+            return []
+        
+        # Create histogram bins (-45 to +45 degrees in 5 degree increments)
+        bins = list(range(-45, 50, 5))
+        hist, bin_edges = np.histogram(launch_angles, bins=bins)
+        
+        total_pitches = len(rows)
+        
+        for i, count in enumerate(hist):
+            if count > 0:
+                bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+                histogram.append({
+                    "histogram_value": str(int(bin_center)),
+                    "pitch_count": str(count),
+                    "total_pitches": str(total_pitches),
+                    "la": str(bin_center),
+                    "pitch_percent": str(round(count / total_pitches * 100, 1))
+                })
+        
+        return histogram
+    
+    def _create_pitch_speed_histogram(self, rows: List[Dict]) -> List[Dict[str, Any]]:
+        """Create pitch speed histogram from raw Statcast data."""
+        histogram = []
+        
+        # Extract pitch speeds (release_speed)
+        pitch_speeds = []
+        for row in rows:
+            try:
+                speed = float(row.get('release_speed', 0))
+                if speed > 0:
+                    pitch_speeds.append(speed)
+            except (ValueError, TypeError):
+                continue
+        
+        if not pitch_speeds:
+            return []
+        
+        # Create histogram bins (75-105 mph in 2 mph increments)
+        bins = list(range(75, 107, 2))
+        hist, bin_edges = np.histogram(pitch_speeds, bins=bins)
+        
+        total_pitches = len(rows)
+        
+        for i, count in enumerate(hist):
+            if count > 0:
+                bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+                histogram.append({
+                    "histogram_value": str(int(bin_center)),
+                    "pitch_count": str(count),
+                    "total_pitches": str(total_pitches),
+                    "pitch_speed": str(bin_center),
+                    "pitch_percent": str(round(count / total_pitches * 100, 1))
+                })
+        
+        return histogram
+    
+    def _create_pitcher_speed_histogram(self, rows: List[Dict]) -> List[Dict[str, Any]]:
+        """Create pitcher speed histogram from raw Statcast data."""
+        return self._create_pitch_speed_histogram(rows)
+    
+    def _create_spin_rate_histogram(self, rows: List[Dict]) -> List[Dict[str, Any]]:
+        """Create spin rate histogram from raw Statcast data."""
+        histogram = []
+        
+        # Extract spin rates
+        spin_rates = []
+        for row in rows:
+            try:
+                spin = float(row.get('spin_rate', 0))
+                if spin > 0:
+                    spin_rates.append(spin)
+            except (ValueError, TypeError):
+                continue
+        
+        if not spin_rates:
+            return []
+        
+        # Create histogram bins (1500-3500 rpm in 200 rpm increments)
+        bins = list(range(1500, 3700, 200))
+        hist, bin_edges = np.histogram(spin_rates, bins=bins)
+        
+        total_pitches = len(rows)
+        
+        for i, count in enumerate(hist):
+            if count > 0:
+                bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+                histogram.append({
+                    "histogram_value": str(int(bin_center)),
+                    "pitch_count": str(count),
+                    "total_pitches": str(total_pitches),
+                    "spin_rate": str(bin_center),
+                    "pitch_percent": str(round(count / total_pitches * 100, 1))
+                })
+        
+        return histogram
+    
+    def _generate_fallback_histograms(self, player_id: str, player_type: str) -> Dict[str, Any]:
+        """Generate fallback histogram data when API fails."""
         if player_type == 'hitters':
             return {
                 "exit_velocity": self._generate_exit_velocity_histogram(player_id),
