@@ -39,92 +39,139 @@ class RollingAdjuster:
             return None
 
     def calculate_hitter_adjustment(self, player_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate adjustment for hitter based on rolling xwOBA trends."""
+        """Calculate adjustment for hitter based on rolling xwOBA trends across all windows."""
         try:
             multi_window = player_data.get("multi_window_data", {})
-
-            # Focus on 50-game window for MVP (most recent data)
-            window_50 = multi_window.get("50", {})
-            if not window_50:
-                return {"adjustment": 0.0, "confidence": 0.0, "reason": "No 50-game window data"}
-
-            series = window_50.get("series", [])
-            if len(series) < 10:  # Need at least 10 games for meaningful trend
-                return {"adjustment": 0.0, "confidence": 0.0, "reason": "Insufficient recent games"}
-
-            # Calculate trend: recent vs older performance
-            recent_games = series[:10]  # Last 10 games
-            older_games = series[-10:]  # 10 games from 40-50 games ago
-
-            recent_xwoba = sum(g.get("xwoba", 0) for g in recent_games) / len(recent_games)
-            older_xwoba = sum(g.get("xwoba", 0) for g in older_games) / len(older_games)
-
-            # Calculate adjustment as percentage change
-            if older_xwoba > 0:
-                trend_pct = (recent_xwoba - older_xwoba) / older_xwoba
-            else:
-                trend_pct = 0.0
-
-            # Apply confidence based on sample size and variance
-            confidence = min(1.0, len(series) / 50.0)  # Scale confidence by games available
-
+            
+            # Define window weights (50-game window gets highest weight)
+            window_weights = {
+                "50": 0.5,   # 50% weight for most recent data
+                "100": 0.3,  # 30% weight for medium-term
+                "250": 0.2   # 20% weight for long-term
+            }
+            
+            adjustments = []
+            total_weight = 0
+            
+            for window_size, weight in window_weights.items():
+                window_data = multi_window.get(window_size, {})
+                if not window_data:
+                    continue
+                    
+                series = window_data.get("series", [])
+                if len(series) < 10:  # Need at least 10 games for meaningful trend
+                    continue
+                
+                # Calculate trend: recent vs older performance
+                recent_games = series[:10]  # Last 10 games
+                older_games = series[-10:]  # 10 games from older part of window
+                
+                recent_xwoba = sum(g.get("xwoba", 0) for g in recent_games) / len(recent_games)
+                older_xwoba = sum(g.get("xwoba", 0) for g in older_games) / len(older_games)
+                
+                # Calculate adjustment as percentage change
+                if older_xwoba > 0:
+                    trend_pct = (recent_xwoba - older_xwoba) / older_xwoba
+                else:
+                    trend_pct = 0.0
+                
+                # Apply confidence based on sample size
+                confidence = min(1.0, len(series) / int(window_size))
+                
+                # Weighted adjustment
+                weighted_adj = trend_pct * confidence * weight
+                adjustments.append(weighted_adj)
+                total_weight += weight
+            
+            if not adjustments:
+                return {"adjustment": 0.0, "confidence": 0.0, "reason": "No valid window data"}
+            
+            # Calculate weighted average adjustment
+            avg_adjustment = sum(adjustments) / total_weight if total_weight > 0 else 0.0
+            
             # Cap adjustment at ±5% for MVP
-            capped_adjustment = max(-0.05, min(0.05, trend_pct * 0.5))  # Scale down trend
-
+            capped_adjustment = max(-0.05, min(0.05, avg_adjustment * 0.5))
+            
+            # Overall confidence based on available windows
+            overall_confidence = min(1.0, total_weight)
+            
             return {
                 "adjustment": capped_adjustment,
-                "confidence": confidence,
-                "recent_xwoba": recent_xwoba,
-                "older_xwoba": older_xwoba,
-                "trend_pct": trend_pct,
-                "games_analyzed": len(series),
-                "reason": f"Recent trend: {trend_pct:.1%} change over {len(series)} games"
+                "confidence": overall_confidence,
+                "windows_used": len(adjustments),
+                "total_weight": total_weight,
+                "reason": f"Multi-window trend: {capped_adjustment:.1%} adjustment using {len(adjustments)} windows"
             }
-
+            
         except Exception as e:
             logger.error(f"Error calculating hitter adjustment: {e}")
             return {"adjustment": 0.0, "confidence": 0.0, "reason": f"Calculation error: {e}"}
-
+    
     def calculate_pitcher_adjustment(self, player_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate adjustment for pitcher based on rolling performance trends."""
+        """Calculate adjustment for pitcher based on rolling performance trends across all windows."""
         try:
             multi_window = player_data.get("multi_window_data", {})
-
-            # Focus on 50-game window for MVP
-            window_50 = multi_window.get("50", {})
-            if not window_50:
-                return {"adjustment": 0.0, "confidence": 0.0, "reason": "No 50-game window data"}
-
-            series = window_50.get("series", [])
-            if len(series) < 10:
-                return {"adjustment": 0.0, "confidence": 0.0, "reason": "Insufficient recent games"}
-
-            # For pitchers, we want to see if they're improving (lower xwOBA = better)
-            recent_games = series[:10]
-            older_games = series[-10:]
-
-            recent_xwoba = sum(g.get("xwoba", 0) for g in recent_games) / len(recent_games)
-            older_xwoba = sum(g.get("xwoba", 0) for g in older_games) / len(older_games)
-
-            # For pitchers: improving = lower xwOBA, so we invert the trend
-            if older_xwoba > 0:
-                trend_pct = (older_xwoba - recent_xwoba) / older_xwoba  # Inverted for pitchers
-            else:
-                trend_pct = 0.0
-
-            confidence = min(1.0, len(series) / 50.0)
-            capped_adjustment = max(-0.05, min(0.05, trend_pct * 0.5))
-
+            
+            # Define window weights (50-game window gets highest weight)
+            window_weights = {
+                "50": 0.5,   # 50% weight for most recent data
+                "100": 0.3,  # 30% weight for medium-term
+                "250": 0.2   # 20% weight for long-term
+            }
+            
+            adjustments = []
+            total_weight = 0
+            
+            for window_size, weight in window_weights.items():
+                window_data = multi_window.get(window_size, {})
+                if not window_data:
+                    continue
+                    
+                series = window_data.get("series", [])
+                if len(series) < 10:
+                    continue
+                
+                # For pitchers, we want to see if they're improving (lower xwOBA = better)
+                recent_games = series[:10]
+                older_games = series[-10:]
+                
+                recent_xwoba = sum(g.get("xwoba", 0) for g in recent_games) / len(recent_games)
+                older_xwoba = sum(g.get("xwoba", 0) for g in older_games) / len(older_games)
+                
+                # For pitchers: improving = lower xwOBA, so we invert the trend
+                if older_xwoba > 0:
+                    trend_pct = (older_xwoba - recent_xwoba) / older_xwoba  # Inverted for pitchers
+                else:
+                    trend_pct = 0.0
+                
+                # Apply confidence based on sample size
+                confidence = min(1.0, len(series) / int(window_size))
+                
+                # Weighted adjustment
+                weighted_adj = trend_pct * confidence * weight
+                adjustments.append(weighted_adj)
+                total_weight += weight
+            
+            if not adjustments:
+                return {"adjustment": 0.0, "confidence": 0.0, "reason": "No valid window data"}
+            
+            # Calculate weighted average adjustment
+            avg_adjustment = sum(adjustments) / total_weight if total_weight > 0 else 0.0
+            
+            # Cap adjustment at ±5% for MVP
+            capped_adjustment = max(-0.05, min(0.05, avg_adjustment * 0.5))
+            
+            # Overall confidence based on available windows
+            overall_confidence = min(1.0, total_weight)
+            
             return {
                 "adjustment": capped_adjustment,
-                "confidence": confidence,
-                "recent_xwoba": recent_xwoba,
-                "older_xwoba": older_xwoba,
-                "trend_pct": trend_pct,
-                "games_analyzed": len(series),
-                "reason": f"Recent trend: {trend_pct:.1%} improvement over {len(series)} games"
+                "confidence": overall_confidence,
+                "windows_used": len(adjustments),
+                "total_weight": total_weight,
+                "reason": f"Multi-window trend: {capped_adjustment:.1%} adjustment using {len(adjustments)} windows"
             }
-
+            
         except Exception as e:
             logger.error(f"Error calculating pitcher adjustment: {e}")
             return {"adjustment": 0.0, "confidence": 0.0, "reason": f"Calculation error: {e}"}
