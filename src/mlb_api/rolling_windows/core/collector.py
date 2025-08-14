@@ -55,6 +55,9 @@ class EnhancedRollingCollector(MLBAPICollector):
         self.max_workers = max_workers or config.get_performance_settings(performance_profile)['max_workers']
         self.request_delay = request_delay or config.get_performance_settings(performance_profile)['request_delay']
 
+        # Initialize player-level incremental updater
+        self.player_updater = PlayerIncrementalUpdater("rolling_windows")
+
         # Data directories
         self.hitters_dir = self.updater.data_dir / "hitters"
         self.pitchers_dir = self.updater.data_dir / "pitchers"
@@ -70,6 +73,16 @@ class EnhancedRollingCollector(MLBAPICollector):
 
         # Window sizes for rolling data
         self.window_sizes = [50, 100, 250]
+
+        # Progress tracking
+        self.progress_stats = {
+            'total_players': 0,
+            'processed': 0,
+            'updated': 0,
+            'skipped': 0,
+            'failed': 0,
+            'start_time': None
+        }
 
     def set_performance_settings(self, max_workers: int, request_delay: float):
         """Set performance settings."""
@@ -98,26 +111,43 @@ class EnhancedRollingCollector(MLBAPICollector):
                 ("345678", "hitters")
             ]
 
-        logger.info(f"📊 Checking {len(all_players)} players for updates...")
+        # Initialize progress tracking
+        self.progress_stats = {
+            'total_players': len(all_players),
+            'processed': 0,
+            'updated': 0,
+            'skipped': 0,
+            'failed': 0,
+            'start_time': time.time()
+        }
+
+        print(f"🔄 Starting collection for {len(all_players)} players...")
+        print(f"⚡ Using {self.max_workers} workers with {self.request_delay}s delay")
 
         # Use incremental collection - only process players that need updates
         updated_players = []
         skipped_players = []
 
+        print("🔍 Checking players for updates...")
         for player_id, player_type in all_players:
             # Check if this individual player needs updating
             if self._player_needs_update(player_id, player_type):
                 updated_players.append((player_id, player_type))
             else:
                 skipped_players.append((player_id, player_type))
+                self._update_progress('skipped')
 
-        logger.info(f"🎯 Smart update: {len(updated_players)} need updates, {len(skipped_players)} already current")
+        print(f"\n🎯 Smart update analysis complete:")
+        print(f"   📊 {len(updated_players)} players need updates")
+        print(f"   ✅ {len(skipped_players)} players already current")
 
         # Only collect data for players that actually need updates
         if updated_players:
+            print(f"\n🚀 Collecting data for {len(updated_players)} players...")
             collection_results = self.collect_data_concurrent(updated_players, self._collect_player_rolling_data)
         else:
             collection_results = []
+            print("\n⏭️ No players need updates - collection complete!")
 
         # Organize results
         organized_data = {
@@ -150,7 +180,8 @@ class EnhancedRollingCollector(MLBAPICollector):
         organized_data['metadata']['successful_collections'] = successful_count
         organized_data['metadata']['failed_collections'] = failed_count
 
-        logger.info(f"✅ Collection completed: {successful_count} successful, {failed_count} failed")
+        # Display final progress
+        self._display_final_progress()
 
         # Add stats for backward compatibility
         self.stats = {
@@ -173,35 +204,78 @@ class EnhancedRollingCollector(MLBAPICollector):
         Returns:
             True if player needs updating, False if data is current
         """
-        # Check if player hash file exists
-        player_hash_file = self.updater.hash_dir / player_type / f"{player_id}.json"
+        # Get existing player data to check hash
+        player_data = self._load_existing_player_data(player_id, player_type)
 
-        if not player_hash_file.exists():
-            logger.debug(f"🆕 Player {player_id} ({player_type}) - no hash file, needs collection")
+        if player_data is None:
+            logger.debug(f"🆕 Player {player_id} ({player_type}) - no existing data, needs collection")
             return True
 
+        # Use player incremental updater to check if data needs updating
+        needs_update, reason = self.player_updater.check_player_needs_update(player_id, player_type, player_data)
+
+        if needs_update:
+            logger.debug(f"🔄 Player {player_id} ({player_type}) - {reason}")
+        else:
+            logger.debug(f"✅ Player {player_id} ({player_type}) - {reason}")
+
+        return needs_update
+
+    def _load_existing_player_data(self, player_id: str, player_type: str) -> Optional[Dict[str, Any]]:
+        """
+        Load existing player data from file.
+
+        Args:
+            player_id: Player ID
+            player_type: Type of player (hitters/pitchers)
+
+        Returns:
+            Player data dict or None if not found
+        """
         try:
-            # Check player's individual hash file for changes
-            with open(player_hash_file, 'r') as f:
-                hash_data = json.load(f)
-
-            # Use the correct timestamp field name
-            timestamp_str = hash_data.get('last_updated', hash_data.get('timestamp', '2000-01-01T00:00:00'))
-            last_update = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00') if timestamp_str.endswith('Z') else timestamp_str)
-            hours_since_update = (datetime.now() - last_update).total_seconds() / 3600
-
-            # For demo purposes, only update if > 6 hours old (adjust as needed)
-            # In production, you might check if new games have been played
-            if hours_since_update > 6:
-                logger.debug(f"⏰ Player {player_id} ({player_type}) - {hours_since_update:.1f}h old, needs update")
-                return True
-            else:
-                logger.debug(f"✅ Player {player_id} ({player_type}) - {hours_since_update:.1f}h old, current")
-                return False
-
+            player_file = self.updater.data_dir / player_type / f"{player_id}.json"
+            if player_file.exists():
+                with open(player_file, 'r') as f:
+                    return json.load(f)
         except Exception as e:
-            logger.debug(f"⚠️ Player {player_id} ({player_type}) - hash read error, needs update: {e}")
-            return True
+            logger.debug(f"Failed to load existing data for {player_type} {player_id}: {e}")
+
+        return None
+
+    def _update_progress(self, action: str):
+        """Update progress statistics and display progress."""
+        self.progress_stats['processed'] += 1
+
+        if action == 'updated':
+            self.progress_stats['updated'] += 1
+        elif action == 'skipped':
+            self.progress_stats['skipped'] += 1
+        elif action == 'failed':
+            self.progress_stats['failed'] += 1
+
+        # Calculate progress percentage
+        if self.progress_stats['total_players'] > 0:
+            progress_pct = (self.progress_stats['processed'] / self.progress_stats['total_players']) * 100
+
+            # Calculate ETA
+            elapsed = time.time() - self.progress_stats['start_time']
+            if self.progress_stats['processed'] > 0:
+                rate = self.progress_stats['processed'] / elapsed
+                remaining = (self.progress_stats['total_players'] - self.progress_stats['processed']) / rate
+                eta_str = f"ETA: {remaining:.0f}s"
+            else:
+                eta_str = "ETA: calculating..."
+
+            # Display progress
+            print(f"\r🔄 Progress: {progress_pct:.1f}% ({self.progress_stats['processed']}/{self.progress_stats['total_players']}) "
+                  f"| Updated: {self.progress_stats['updated']} | Skipped: {self.progress_stats['skipped']} | Failed: {self.progress_stats['failed']} | {eta_str}",
+                  end='', flush=True)
+
+    def _display_final_progress(self):
+        """Display final progress summary."""
+        elapsed = time.time() - self.progress_stats['start_time']
+        print(f"\n✅ Collection completed in {elapsed:.1f}s")
+        print(f"📊 Summary: {self.progress_stats['updated']} updated, {self.progress_stats['skipped']} skipped, {self.progress_stats['failed']} failed")
 
     def _get_active_players(self) -> List[Tuple[str, str]]:
         """Get list of active players to collect data for.
@@ -335,10 +409,10 @@ class EnhancedRollingCollector(MLBAPICollector):
             data = self._fetch_rolling_data_from_api(player_id, player_type)
 
             # Check if player needs updating using hash system
-            needs_update, reason = self.check_player_needs_update(player_id, player_type, data)
+            needs_update, reason = self.player_updater.check_player_needs_update(player_id, player_type, data)
 
             if not needs_update:
-                logger.debug(f"⏭️ Skipping {player_type} {player_id}: {reason}")
+                self._update_progress('skipped')
                 return {
                     'success': True,
                     'player_id': player_id,
@@ -363,10 +437,9 @@ class EnhancedRollingCollector(MLBAPICollector):
                 json.dump(data, f, indent=2)
 
             # Update player hash
-            self.update_player_hash(player_id, player_type, data, str(output_file))
+            self.player_updater.update_player_hash(player_id, player_type, data, str(output_file))
 
-            logger.debug(f"✅ Updated {player_type} {player_id}: {reason}")
-
+            self._update_progress('updated')
             return {
                 'success': True,
                 'player_id': player_id,
@@ -377,6 +450,7 @@ class EnhancedRollingCollector(MLBAPICollector):
             }
 
         except Exception as e:
+            self._update_progress('failed')
             logger.error(f"❌ Failed to collect rolling data for {player_type} {player_id}: {e}")
             return {
                 'success': False,

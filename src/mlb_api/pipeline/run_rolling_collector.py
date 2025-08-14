@@ -79,11 +79,10 @@ def run_collection(force_update=False, max_workers=4):
     print(f"🚀 Rolling Windows Collection - {'FORCED' if force_update else 'SMART'}")
 
     try:
-        # Initialize collector
+        # Initialize collector with ultra-aggressive profile
         collector = EnhancedRollingCollector(
-            performance_profile='balanced',
-            max_workers=max_workers,
-            request_delay=0.05
+            performance_profile='ultra_aggressive',
+            max_workers=max_workers  # Pipeline argument overrides profile default
         )
 
         # Run collection with incremental logic
@@ -131,8 +130,8 @@ def main():
                        help='Check status without running collection')
     parser.add_argument('--force', action='store_true',
                        help='Force full update regardless of hash')
-    parser.add_argument('--workers', type=int, default=4,
-                       help='Number of concurrent workers (default: 4)')
+    parser.add_argument('--workers', type=int, default=12,
+                       help='Number of concurrent workers (default: 12)')
 
     args = parser.parse_args()
 

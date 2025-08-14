@@ -229,7 +229,15 @@ def main():
         sys.exit(1)
 
     har_file = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
+    output_dir = None
+
+    # Handle additional arguments
+    if len(sys.argv) > 2:
+        if sys.argv[2].startswith('--'):
+            # Skip flag arguments
+            pass
+        else:
+            output_dir = sys.argv[2]
 
     # Validate HAR file
     har_path = Path(har_file)
@@ -250,24 +258,23 @@ def main():
         print(f"❌ Error loading HAR file: {e}")
         sys.exit(1)
 
-    # Detect site
+    # Detect site and slate
     site = detect_site_from_har(har_path)
     print(f"🏠 Detected site: {site}")
+
+    # Detect slate from HAR entries
+    slate = detect_slate_from_har(har_path)
+    print(f"🎯 Detected slate: {slate}")
 
     # Determine output directory
     if output_dir is None:
         # Auto-generate output directory based on date, site, and detected slate
         today = datetime.now()
         date_str = today.strftime("%m%d")
-
-        # Detect slate from HAR entries
-        slate = detect_slate_from_har(har_path)
         slate_suffix = f"_{slate}"  # Always append slate
-
         output_dir = f"_data/sabersim_2025/{site}/{date_str}{slate_suffix}"
 
     print(f"📂 Output directory: {output_dir}")
-    print(f"🎯 Detected slate: {slate}")
 
     # Group entries by site and contest bucket
     from collections import defaultdict
@@ -285,13 +292,9 @@ def main():
         site_entry = detect_site_from_entry(entry)
         site_counts[site_entry if site_entry in ("draftkings", "fanduel") else None] += 1
 
-        # Site override: if user passed a specific site, filter to it
-        if site_entry and site_entry != site:
-            continue
-
-        # If we still don't know site, fall back to global detection
+        # If we can't detect site from entry, skip it (don't fall back to global)
         if not site_entry:
-            site_entry = site
+            continue
 
         bucket = detect_contest_bucket(entry)
         groups[site_entry][bucket].append(entry)

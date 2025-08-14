@@ -70,17 +70,17 @@ def check_status():
         return True
 
 
-def run_collection(force_update=False, max_workers=5):
+def run_collection(force_update=False, max_workers=12):
     """Run active rosters collection with smart incremental updates."""
     start_time = time.time()
 
     print(f"🚀 Active Rosters Collection - {'FORCED' if force_update else 'SMART'}")
 
     try:
-        # Initialize collector
+        # Initialize collector with ultra-aggressive settings
         collector = ActiveRostersCollector(
             max_workers=max_workers,
-            request_delay=0.1  # Be respectful to MLB API
+            request_delay=0.01  # Ultra-aggressive delay
         )
 
         # Run collection with incremental logic
@@ -130,8 +130,8 @@ def main():
                        help='Check status without running collection')
     parser.add_argument('--force', action='store_true',
                        help='Force full update regardless of hash')
-    parser.add_argument('--workers', type=int, default=5,
-                       help='Number of concurrent workers (default: 5)')
+    parser.add_argument('--workers', type=int, default=12,
+                       help='Number of concurrent workers (default: 12)')
 
     args = parser.parse_args()
 

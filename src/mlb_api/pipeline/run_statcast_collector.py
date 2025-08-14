@@ -84,10 +84,10 @@ def run_collection(force_update=False, max_workers=8, days_back=3):
     print(f"📅 Days Back: {days_back}")
 
     try:
-        # Initialize collector
+        # Initialize collector with ultra-aggressive profile
         collector = StatcastAdvancedCollector(
-            max_workers=max_workers,
-            request_delay=0.1  # Be respectful to Baseball Savant
+            performance_profile='ultra_aggressive',
+            max_workers=max_workers  # Pipeline argument overrides profile default
         )
 
         # If days_back is specified, proactively collect those dates before hash update
@@ -146,8 +146,8 @@ def main():
                        help='Check status without running collection')
     parser.add_argument('--force', action='store_true',
                        help='Force full update regardless of hash')
-    parser.add_argument('--workers', type=int, default=8,
-                       help='Number of concurrent workers (default: 8)')
+    parser.add_argument('--workers', type=int, default=12,
+                       help='Number of concurrent workers (default: 12)')
     parser.add_argument('--days', type=int, default=3,
                        help='Number of days back to collect (default: 3)')
 

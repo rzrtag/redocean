@@ -16,7 +16,6 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from sabersim.atoms.extractors.extract import (
-    MLBAtomExtractor,
     detect_site_from_har,
     detect_slate_from_har,
 )
@@ -65,10 +64,21 @@ def extract_from_har(har_file: Path, output_dir: Path) -> bool:
     print(f"📂 Output: {output_dir}")
 
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        extractor = MLBAtomExtractor(str(output_dir))
-        extractor.extract_atoms_from_har(str(har_file))
-        return True
+        # Use our new extraction script with proper site detection
+        import subprocess
+        cmd = [
+            "python3",
+            str(Path(__file__).parent.parent / "atoms" / "extractors" / "extract.py"),
+            str(har_file)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+
+        if result.returncode == 0:
+            print("✅ Extraction completed successfully")
+            return True
+        else:
+            print(f"❌ Extraction failed: {result.stderr}")
+            return False
     except Exception as e:
         print(f"❌ Extraction failed for {har_file}: {e}")
         return False
