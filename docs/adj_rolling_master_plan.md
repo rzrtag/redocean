@@ -72,6 +72,23 @@ Inputs → win_calc → Outputs → Exports
   - DK: `/mnt/storage_fast/workspaces/red_ocean/dfs_1/entries/dk_upload.csv`
   - FD: `/mnt/storage_fast/workspaces/red_ocean/dfs_1/entries/fd_upload.csv`
 
+## Platform Adjustments (DK vs FD)
+Platform differences must be respected end-to-end.
+
+- Scoring systems: DK and FD award different fantasy points for events. Until we port scoring tables, we adjust the site-specific SaberSim median directly (already expressed in the site’s FP units). No cross-site mixing.
+- CSV schemas: Upload column names and formats can differ by platform; we will maintain per-site exporters (`dk_upload.csv`, `fd_upload.csv`).
+- Roster/constraints & salary caps: Used downstream for portfolio optimization; keep site metadata available alongside projections.
+- Implementation plan:
+  1) Centralize platform metadata in `win_calc` (site id, scoring version tag, CSV schema hints, salary cap, roster constraints).
+  2) Ensure the adjustment path always uses site-scoped inputs and writes site-scoped outputs.
+  3) Later, port exact scoring rules from `docs/old/fantasy_points_guide.md` and `docs/old/dk_vs_fd.md` into code to support statline-to-FP recalculation if needed for backtests.
+  4) Validate export files with small test uploads on each platform.
+
+References for porting (to be codified soon):
+- `docs/old/fantasy_points_guide.md` — event scoring
+- `docs/old/dk_vs_fd.md` — platform differences
+- `docs/old/platform_adj.md` — prior platform adjustment notes
+
 ## Backtesting & Tuning
 - Metrics: RMSE, calibration, contest ROI/profit metrics.
 - Procedures: rolling-origin, OOS validation; grid/Bayesian tuning for (k, weights, caps, thresholds).
