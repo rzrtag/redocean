@@ -184,7 +184,7 @@ def check_status():
         return False
 
 
-def run_collection(force_update=False, max_workers=16):
+def run_collection(force_update=False, max_workers=16, season_year=2025):
     """Run rolling windows collection."""
     start_time = time.time()
 
@@ -195,7 +195,8 @@ def run_collection(force_update=False, max_workers=16):
         # Initialize collector with super aggressive profile
         collector = EnhancedRollingCollector(
             data_dir="_data/mlb_api_2025/rolling_windows",
-            performance_profile='super_aggressive'
+            performance_profile='super_aggressive',
+            season_year=season_year,
         )
 
         # Get active players
@@ -221,6 +222,12 @@ def run_collection(force_update=False, max_workers=16):
         print(f"   ✅ Successful: {successful}")
         print(f"   ❌ Failed: {failed}")
         print(f"   ⏭️ Skipped: {skipped}")
+
+        # Ensure graceful exit
+        if failed > 0:
+            logger.warning("Collection completed with failures; exiting 1 for CI")
+            return False
+        return True
 
         if failed > 0:
             print(f"❌ Failed players (first 5):")
@@ -260,7 +267,11 @@ def main():
         needs_update = check_status()
         sys.exit(1 if needs_update else 0)
     else:
-        success = run_collection(force_update=args.force, max_workers=args.workers)
+        success = run_collection(
+            force_update=args.force,
+            max_workers=args.workers,
+            season_year=2025,
+        )
         sys.exit(0 if success else 1)
 
 
