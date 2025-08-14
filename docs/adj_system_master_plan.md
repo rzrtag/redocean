@@ -128,4 +128,34 @@ Inputs → win_calc → Outputs → Exports
 - How to handle players with missing rolling windows (call-ups, injuries)?
 - Exposure rules in CSV or defer to SaberSim UI?
 
-This plan will evolve as we iterate on parameters and validation results.
+---
+
+## Starter/Eligibility Logic and MVP Scope
+
+- **Rookies/Call-ups**: No adjustment for now. If a player lacks required rolling history (below min PA/IP or missing windows), use SaberSim median as-is.
+
+- **Who gets adjusted (batters)**:
+  - Use SaberSim tables to identify starters. Players with `bat_order_visible > 0` are treated as projected or confirmed starters.
+  - If lineups are not fully confirmed by lock, treat projected starters (with `bat_order_visible > 0`) as starters for adjustment.
+
+- **Who gets adjusted (pitchers)**:
+  - Starters implied from SaberSim slate context (e.g., `games.json` shows `home_starter` / `away_starter`; once confirmed there is a `status=confirmed` elsewhere).
+  - If explicit “projected starter” field is absent, infer from those fields and team context; when confirmed, continue to adjust; if not confirmed, still adjust if implied starter.
+
+- **Data timing**:
+  - SaberSim slates refresh as lineups confirm. We accept projected info until confirmed; adjustments run on either projected or confirmed starters.
+
+- **MVP rolling signals (precomputed windows first)**:
+  - Start with precomputed windows available from collections (e.g., xwOBA over 50/100/150-day windows).
+  - Build an initial adjustment using these windows only, with conservative caps.
+  - Histograms present in rolling files (e.g., exit velocity distributions) are reserved for Phase 2 augmentation once methodology is finalized.
+
+- **MVP adjustment rule (batters example)**:
+  - Compute recent tilt factor from xwOBA windows (e.g., weighted blend 50/100/150 with recency weights).
+  - Apply linear tilt to SaberSim median: `P_adj = P_base * (1 + k * S_recent)` with cap ±20%.
+  - Skip players with insufficient recent PA.
+
+- **CSV Output**:
+  - Produce per-site upload CSVs at `dfs_1/entries/dk_upload.csv` and `dfs_1/entries/fd_upload.csv` containing adjusted projections for projected/confirmed starters only.
+
+This section formalizes the MVP behavior so we can ship end-to-end (load → adjust → export) before augmenting with Statcast granular signals and histogram-based enhancements.
