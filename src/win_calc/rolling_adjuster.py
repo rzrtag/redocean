@@ -11,6 +11,9 @@ BASE_DATA = Path("/mnt/storage_fast/workspaces/red_ocean/_data")
 ROLLING_DATA = (BASE_DATA / "mlb_api_2025" /
                 "rolling_windows" / "data")
 
+# Import our new histogram calculator
+from .histogram_calculator import HistogramCalculator
+
 
 class RollingAdjuster:
     """Calculate rolling window adjustments for SaberSim projections."""
@@ -18,6 +21,7 @@ class RollingAdjuster:
     def __init__(self):
         self.hitters_dir = ROLLING_DATA / "hitters"
         self.pitchers_dir = ROLLING_DATA / "pitchers"
+        self.histogram_calculator = HistogramCalculator()
 
     def load_player_rolling_data(self, player_id: str, player_type: str) -> Optional[Dict[str, Any]]:
         """Load rolling window data for a specific player."""
@@ -194,3 +198,25 @@ class RollingAdjuster:
             return self.calculate_hitter_adjustment(player_data)
         else:
             return self.calculate_pitcher_adjustment(player_data)
+
+    def check_histogram_availability(self, player_id: str, player_type: str) -> Dict[str, Any]:
+        """Check what histogram data is available for a player using our Statcast data."""
+        # Convert player_type to match Statcast data format
+        statcast_type = "batter" if player_type == "hitter" else player_type
+        # Use our new histogram calculator instead of rolling windows data
+        histograms = self.histogram_calculator.get_player_histograms(player_id, statcast_type)
+        
+        # Check what histogram types are available
+        available_types = {}
+        for hist_type, hist_data in histograms.items():
+            if isinstance(hist_data, list) and len(hist_data) > 0:
+                available_types[hist_type] = len(hist_data)
+            else:
+                available_types[hist_type] = 0
+        
+        return {
+            "available": any(count > 0 for count in available_types.values()),
+            "histogram_types": available_types,
+            "total_types": len(available_types),
+            "reason": f"Found {sum(1 for c in available_types.values() if c > 0)}/{len(available_types)} histogram types with data from Statcast"
+        }

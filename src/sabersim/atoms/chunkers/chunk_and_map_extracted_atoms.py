@@ -55,4 +55,4 @@ def main():
     print(f"Reference map written to {map_doc_path}")
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -260,10 +260,11 @@ class StatcastAdvancedCollector(MLBAPICollector):
         # First, run the base collection to check for hash changes
         was_updated, data, reason = super().run_collection(force_update)
 
+        # TEMPORARILY DISABLED: update_date_files() causes hanging
         # If the hash system detected changes, update the date-based statcast files
-        if was_updated:
-            logger.info("🔄 Hash system detected changes - updating date-based statcast files...")
-            self.update_date_files()
+        # if was_updated:
+        #     logger.info("🔄 Hash system detected changes - updating date-based statcast files...")
+        #     self.update_date_files()
 
         return was_updated, data, reason
 
@@ -274,19 +275,25 @@ class StatcastAdvancedCollector(MLBAPICollector):
         """
         logger.info("🔄 Hash system detected changes - updating date-based and player-based statcast files...")
 
-        # Get the current season dates
+        # Get the current season dates - but only process recent dates for efficiency
         season_start, season_end = self._get_regular_season_dates()
         if not season_start or not season_end:
             logger.error("Could not determine season dates")
             return
 
-        # Process each date in the season to update both date-based and player-based files
+        # Only process recent dates (last 30 days) to avoid long loops
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=30)
+
+        logger.info(f"🔄 Processing dates from {start_date} to {end_date}")
+
+        # Process each date in the recent range
         total_at_bats = 0
         dates_updated = 0
         games_processed = 0
 
-        current_date = datetime.strptime(season_start, '%Y-%m-%d')
-        end_date = datetime.strptime(season_end, '%Y-%m-%d')
+        current_date = datetime.combine(start_date, datetime.min.time())
+        end_date = datetime.combine(end_date, datetime.min.time())
 
         while current_date <= end_date:
             date_str = current_date.strftime('%Y-%m-%d')
@@ -314,6 +321,9 @@ class StatcastAdvancedCollector(MLBAPICollector):
             time.sleep(self.request_delay)
 
         logger.info(f"✅ Both date-based and player-based statcast files updated: {total_at_bats} at-bats, {dates_updated} dates, {games_processed} games")
+
+        # Ensure we return properly
+        return
 
     def _create_stable_date_data(self, date_data: Dict) -> Dict:
         """

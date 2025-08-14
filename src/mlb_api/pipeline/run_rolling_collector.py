@@ -2,22 +2,22 @@
 """
 Production Rolling Windows Collector Runner
 
-Runs rolling windows data collection with smart incremental updates.
-Only collects data that has actually changed since last update.
+Runs rolling windows data collection with the new Baseball Savant JSON endpoints.
 
 Usage:
-    python run_rolling_collector.py              # Smart incremental update
-    python run_rolling_collector.py --status     # Check what needs updating
+    python run_rolling_collector.py              # Collect all active players
+    python run_rolling_collector.py --status     # Check collection status
     python run_rolling_collector.py --force      # Force full update
-    python run_rolling_collector.py --workers 8  # Use 8 concurrent workers
+    python run_rolling_collector.py --workers 16 # Use 16 concurrent workers
 """
 
 import sys
 import argparse
 import time
 import logging
+import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -32,85 +32,206 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_active_players():
+    """Get list of active players from rosters (includes recently activated players)."""
+    try:
+        rosters_file = Path("_data/mlb_api_2025/active_rosters/data/active_rosters.json")
+        if not rosters_file.exists():
+            logger.warning("No active rosters found, using sample players")
+            return [("670242", "hitter"), ("677951", "hitter"), ("624413", "hitter")]
+
+        with open(rosters_file, 'r') as f:
+            data = json.load(f)
+
+        players = []
+        for team_data in data.get('rosters', {}).values():
+            team_roster = team_data.get('roster', [])
+            for player in team_roster:
+                player_id = str(player.get('id'))
+                position = player.get('primaryPosition', {})
+                position_type = position.get('type', 'Unknown')
+
+                # Determine player type
+                if position_type == 'Pitcher':
+                    player_type = 'pitcher'
+                else:
+                    player_type = 'hitter'
+
+                players.append((player_id, player_type))
+
+        logger.info(f"Found {len(players)} active roster players (including recently activated)")
+        return players
+
+    except Exception as e:
+        logger.error(f"Error loading Statcast BBE players: {e}")
+        # Fallback to active rosters if Statcast data not available
+        try:
+            rosters_file = Path("_data/mlb_api_2025/active_rosters/data/active_rosters.json")
+            if rosters_file.exists():
+                with open(rosters_file, 'r') as f:
+                    data = json.load(f)
+
+                players = []
+                for team_data in data.get('rosters', {}).values():
+                    team_roster = team_data.get('roster', [])
+                    for player in team_roster:
+                        player_id = str(player.get('id'))
+                        position = player.get('primaryPosition', {})
+                        position_type = position.get('type', 'Unknown')
+
+                        if position_type == 'Pitcher':
+                            player_type = 'pitcher'
+                        else:
+                            player_type = 'hitter'
+
+                        players.append((player_id, player_type))
+
+                logger.info(f"Fallback: Found {len(players)} active roster players")
+                return players
+        except Exception as e2:
+            logger.error(f"Fallback also failed: {e2}")
+
+        return [("670242", "hitter"), ("677951", "hitter"), ("624413", "hitter")]
+
+
+def cleanup_empty_files():
+    """Remove rolling windows files with no actual data."""
+    data_dir = Path("_data/mlb_api_2025/rolling_windows")
+    hitters_dir = data_dir / "data" / "hitters"
+    pitchers_dir = data_dir / "data" / "pitchers"
+
+    removed = 0
+    kept = 0
+
+    # Clean hitters
+    if hitters_dir.exists():
+        for file_path in hitters_dir.glob("*.json"):
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+
+                # Check if player has actual rolling windows data
+                has_data = False
+                for window_size in ['50', '100', '250']:
+                    if len(data.get('rolling_windows', {}).get(window_size, {}).get('series', [])) > 0:
+                        has_data = True
+                        break
+
+                if not has_data:
+                    file_path.unlink()
+                    removed += 1
+                else:
+                    kept += 1
+
+            except Exception as e:
+                logger.warning(f"Error processing {file_path}: {e}")
+
+    # Clean pitchers
+    if pitchers_dir.exists():
+        for file_path in pitchers_dir.glob("*.json"):
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+
+                # Check if player has actual rolling windows data
+                has_data = False
+                for window_size in ['50', '100', '250']:
+                    if len(data.get('rolling_windows', {}).get(window_size, {}).get('series', [])) > 0:
+                        has_data = True
+                        break
+
+                if not has_data:
+                    file_path.unlink()
+                    removed += 1
+                else:
+                    kept += 1
+
+            except Exception as e:
+                logger.warning(f"Error processing {file_path}: {e}")
+
+    return {"removed": removed, "kept": kept}
+
+
 def check_status():
-    """Check rolling windows update status."""
+    """Check rolling windows collection status."""
     print("🔍 Rolling Windows Status Check...")
 
-    collector = EnhancedRollingCollector(performance_profile='balanced')
+    data_dir = Path("_data/mlb_api_2025/rolling_windows")
+    hitters_dir = data_dir / "data" / "hitters"
+    pitchers_dir = data_dir / "data" / "pitchers"
 
-    # Check hash information
-    hash_info = collector.updater.get_hash_info()
+    hitters_count = len(list(hitters_dir.glob("*.json"))) if hitters_dir.exists() else 0
+    pitchers_count = len(list(pitchers_dir.glob("*.json"))) if pitchers_dir.exists() else 0
+    total_files = hitters_count + pitchers_count
 
-    if hash_info:
-        # Get timestamp from current hash data or last_update field
-        current_hash = hash_info.get('current_hash', {})
-        timestamp = current_hash.get('timestamp') or hash_info.get('last_update')
-        data_size = current_hash.get('data_size', 0)
+    print(f"📊 Current Data:")
+    print(f"   Hitters: {hitters_count} files")
+    print(f"   Pitchers: {pitchers_count} files")
+    print(f"   Total: {total_files} files")
 
-        if timestamp:
-            if isinstance(timestamp, str):
-                last_update = datetime.fromisoformat(timestamp.replace('Z', '+00:00') if timestamp.endswith('Z') else timestamp)
-            else:
-                last_update = timestamp
-            hours_since = (datetime.now() - last_update).total_seconds() / 3600
+    # Get active players count for comparison
+    active_players = get_active_players()
+    print(f"🎯 Active Players: {len(active_players)}")
 
-            print(f"📅 Last Update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"⏰ Hours Since: {hours_since:.1f}h")
-            print(f"📊 Data Size: {data_size:,} bytes")
-
-            if hours_since < 6:
-                print("✅ Data is current (< 6 hours)")
-                return False
-            else:
-                print("⚠️ Data needs refresh (> 6 hours)")
-                return True
-        else:
-            print("❓ No timestamp found")
-            return True
-    else:
-        print("❓ No hash data found - full collection needed")
+    if total_files == 0:
+        print("❌ No data collected yet - full collection needed")
         return True
+    elif total_files < len(active_players) * 0.8:  # Less than 80% coverage
+        print("⚠️ Incomplete data - collection needed")
+        return True
+    else:
+        print("✅ Data appears complete")
+        return False
 
 
-def run_collection(force_update=False, max_workers=4):
-    """Run rolling windows collection with smart incremental updates."""
+def run_collection(force_update=False, max_workers=16):
+    """Run rolling windows collection."""
     start_time = time.time()
 
-    print(f"🚀 Rolling Windows Collection - {'FORCED' if force_update else 'SMART'}")
+    print(f"🚀 Rolling Windows Collection - {'FORCED' if force_update else 'STANDARD'}")
+    print(f"⚡ Super Aggressive Mode: {max_workers} workers")
 
     try:
-        # Initialize collector with ultra-aggressive profile
+        # Initialize collector with super aggressive profile
         collector = EnhancedRollingCollector(
-            performance_profile='ultra_aggressive',
-            max_workers=max_workers  # Pipeline argument overrides profile default
+            data_dir="_data/mlb_api_2025/rolling_windows",
+            performance_profile='super_aggressive'
         )
 
-        # Run collection with incremental logic
-        was_updated, data, reason = collector.run_collection(force_update=force_update)
+        # Get active players
+        active_players = get_active_players()
+        player_ids = [p[0] for p in active_players]
+        player_types = list(set([p[1] for p in active_players]))
+
+        print(f"📊 Collecting data for {len(player_ids)} players...")
+        print(f"🎯 Player types: {player_types}")
+
+        # Run collection
+        results = collector.collect_all_players(player_ids, player_types)
 
         execution_time = time.time() - start_time
 
-        if was_updated:
-            metadata = data.get('metadata', {})
-            total_players = metadata.get('total_players', 0)
-            successful = metadata.get('successful_collections', 0)
-            failed = metadata.get('failed_collections', 0)
+        # Display results
+        successful = len(results['success'])
+        failed = len(results['failed'])
+        skipped = len(results['skipped'])
 
-            print(f"✅ Collection completed in {execution_time:.1f}s")
-            print(f"📊 Total Players: {total_players}")
-            print(f"🎯 Successful: {successful}, Failed: {failed}")
-            print(f"💡 Reason: {reason}")
+        print(f"✅ Collection completed in {execution_time:.1f}s")
+        print(f"📊 Results:")
+        print(f"   ✅ Successful: {successful}")
+        print(f"   ❌ Failed: {failed}")
+        print(f"   ⏭️ Skipped: {skipped}")
 
-            # Show efficiency metrics if available
-            if hasattr(collector, '_last_collection_stats'):
-                stats = collector._last_collection_stats
-                updated = stats.get('updated_players', 0)
-                skipped = stats.get('skipped_players', 0)
-                print(f"⚡ Efficiency: {updated} updated, {skipped} skipped")
+        if failed > 0:
+            print(f"❌ Failed players (first 5):")
+            for failure in results['failed'][:5]:
+                print(f"   {failure}")
 
-        else:
-            print(f"⏭️ No updates needed ({execution_time:.1f}s)")
-            print(f"💡 Reason: {reason}")
+        # Clean up empty files (players with no recent data)
+        print("🧹 Cleaning up empty files...")
+        cleanup_results = cleanup_empty_files()
+        print(f"   📁 Removed {cleanup_results['removed']} empty files")
+        print(f"   📊 Kept {cleanup_results['kept']} files with data")
 
         return True
 
@@ -129,9 +250,9 @@ def main():
     parser.add_argument('--status', action='store_true',
                        help='Check status without running collection')
     parser.add_argument('--force', action='store_true',
-                       help='Force full update regardless of hash')
-    parser.add_argument('--workers', type=int, default=12,
-                       help='Number of concurrent workers (default: 12)')
+                       help='Force full update regardless of existing data')
+    parser.add_argument('--workers', type=int, default=16,
+                       help='Number of concurrent workers (default: 16)')
 
     args = parser.parse_args()
 

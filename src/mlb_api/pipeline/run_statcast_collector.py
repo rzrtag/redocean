@@ -76,11 +76,11 @@ def check_status():
         return True
 
 
-def run_collection(force_update=False, max_workers=8, days_back=3):
-    """Run Statcast collection with smart incremental updates."""
+def run_collection(force_update=False, max_workers=16, days_back=3):
+    """Run Statcast collection with simple date-based updates."""
     start_time = time.time()
 
-    print(f"🚀 Statcast Collection - {'FORCED' if force_update else 'SMART'}")
+    print(f"🚀 Statcast Collection - {'FORCED' if force_update else 'SIMPLE'}")
     print(f"📅 Days Back: {days_back}")
 
     try:
@@ -90,45 +90,44 @@ def run_collection(force_update=False, max_workers=8, days_back=3):
             max_workers=max_workers  # Pipeline argument overrides profile default
         )
 
-        # If days_back is specified, proactively collect those dates before hash update
+        # Simple approach: collect recent dates directly
         if days_back and days_back > 0:
             end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
-            collector.collect_date_range(start_date, end_date)
 
-        # Run collection with incremental logic (updates hash and triggers date updates if needed)
-        was_updated, data, reason = collector.run_collection(force_update=force_update)
+            print(f"📅 Collecting dates: {start_date} to {end_date}")
+            results = collector.collect_date_range(start_date, end_date)
 
-        execution_time = time.time() - start_time
+            # Calculate summary from results
+            total_at_bats = sum(results.values())
+            dates_collected = len([v for v in results.values() if v > 0])
 
-        if was_updated:
-            summary = data.get('summary', {}) if isinstance(data, dict) else {}
-            total_games = summary.get('total_games', 0)
-            total_players = summary.get('total_players', 0)
+            execution_time = time.time() - start_time
 
             print(f"✅ Collection completed in {execution_time:.1f}s")
-            print(f"🏟️ Games: {total_games}")
-            print(f"👥 Players: {total_players}")
-            print(f"💡 Reason: {reason}")
+            print(f"📊 Results:")
+            print(f"   📅 Dates collected: {dates_collected}")
+            print(f"   ⚾ Total at-bats: {total_at_bats}")
 
-            # Show recent games collected
-            dates_data = data.get('dates', {}) if isinstance(data, dict) else {}
-            if dates_data:
-                print("🗓️ Recent Dates:")
-                date_keys = sorted(dates_data.keys(), reverse=True)
-                for date_key in date_keys[:5]:
-                    date_summary = dates_data[date_key]
-                    games_on_date = date_summary.get('total_games') or date_summary.get('summary', {}).get('total_games', 0)
-                    print(f"   {date_key}: {games_on_date} games")
+            # Show recent dates with actual data
+            print("🗓️ Recent Dates:")
+            for date_str, at_bats in sorted(results.items(), reverse=True)[:5]:
+                if at_bats > 0:
+                    print(f"   {date_str}: {at_bats} at-bats")
 
-                if len(date_keys) > 5:
-                    print(f"   ... and {len(date_keys) - 5} more dates")
+            return True
 
         else:
-            print(f"⏭️ No updates needed ({execution_time:.1f}s)")
-            print(f"💡 Reason: {reason}")
+            print("⏭️ No dates specified for collection")
+            return False
 
-        return True
+    except KeyboardInterrupt:
+        print("\n⏹️ Collection cancelled by user")
+        return False
+    except Exception as e:
+        print(f"❌ Collection failed: {e}")
+        logger.exception("Statcast collection error")
+        return False
 
     except KeyboardInterrupt:
         print("\n⏹️ Collection cancelled by user")

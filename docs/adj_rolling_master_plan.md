@@ -44,7 +44,7 @@ Notes:
 **DraftKings (Power-Heavy Scoring):**
 - **Home Runs**: 14 points (massive value)
 - **RBIs**: 2 points
-- **Runs**: 2 points  
+- **Runs**: 2 points
 - **Stolen Bases**: 5 points
 - **Pitcher Strikeouts**: 2.25 points
 - **Pitcher Innings**: 2.25 points
