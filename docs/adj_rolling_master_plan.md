@@ -106,3 +106,40 @@ References for porting (to be codified soon):
 - What is MVP? Minimum Viable Product — the smallest end-to-end version that delivers value and lets us iterate safely.
 - Why precomputed windows first? They’re already collected daily, enabling a fast path to a working pipeline.
 - How do we treat projected vs confirmed lineups? Treat `bat_order_visible > 0` as starters (projected or confirmed). Update as confirmations roll in; adjustments apply in either case.
+
+## SaberSim Dataset Layout (per site/slate)
+Base directory example (FanDuel main slate on 08/13):
+`_data/sabersim_2025/fanduel/0813_main_slate`
+
+- `atoms_output/`
+  - `atoms/`
+    - `build_optimization.json`: Latest build optimization configuration/results snapshot.
+    - `contest_information.json`: Contest listings, sizes, payouts, metadata.
+    - `contest_simulations_<bucket>.json`: Contest-level simulation results for a specific bucket (e.g., `flagship_mid_entry`).
+    - `field_lineups_<bucket>.json`: Field (opponent) lineup samples/flags for a contest bucket.
+  - `metadata/`
+    - `atom_registry.json`: Known atom IDs written during extraction.
+    - `endpoint_mapping.json`: Map of endpoint types to atom IDs.
+    - `extraction_summary.json`: When/what was extracted (mtime, counts, provenance).
+  - `tables/`
+    - `contest_summary.json`: Consolidated summary of contests on the slate.
+    - `games.json`: Per-game slate context (start times, starters, team confirmations, win probs, etc.).
+    - `map_docs.json`: Cross-reference map (players/teams/games) for convenience.
+    - `master_summary.json`: High-level rollup across generated tables.
+    - `players.json`: Player-level table (ids, names, teams, positions, salaries, projections).
+    - `starters.json`: Starter-centric view derived from atoms/tables (batters with `bat_order_visible`, implied SPs).
+
+- `tables_analysis/`
+  - `contest_site_summary.json`: Summary of site/slate-level metrics (counts, coverage, timestamps).
+  - `lineup_stats.json`: Aggregate lineup-level statistics derived from tables/atoms.
+  - `pid_own_batters_<bucket>.json`: Batter ownership estimates per player id for a contest bucket.
+  - `pid_own_pitchers_<bucket>.json`: Pitcher ownership estimates per player id for a contest bucket.
+  - `stack_analysis.json`: Stack configuration analysis (team stacks, sizes, efficiency metrics).
+  - `stack_own_<bucket>.json`: Stack ownership estimates for the given contest bucket.
+
+Notes:
+- Buckets (e.g., `flagship_mid_entry`) segment contest types/sizes; multiple bucket files may exist.
+- Starters:
+  - Batters are considered projected/confirmed starters if `bat_order_visible > 0`.
+  - Pitchers are implied via `games.json` (`home_starter`/`away_starter`) and confirmation flags elsewhere; treat implied as starters until proven otherwise.
+- These artifacts refresh as lineups confirm; ADJ should tolerate projected status and update when confirmations arrive.
