@@ -22,15 +22,20 @@ Useful historical docs (reference only): `docs/old/fantasy_points_guide.md`, `do
 - Pitchers to adjust: implied starters from SaberSim slate context (e.g., `games.json` `home_starter`/`away_starter`); once confirmed, continue to adjust. If not confirmed, still adjust if implied.
 
 ## MVP Adjustment Method (precomputed windows first)
-- Windows: 50-day, 100-day, 150-day (existing precomputed windows, e.g., xwOBA for hitters; analogous pitcher metrics if present).
+- Windows: 50 events, 100 events, 250 events (existing precomputed windows, e.g., xwOBA for hitters; analogous pitcher metrics if present).
 - Compute z-scores vs seasonal baseline and apply sample-size-aware shrinkage.
 - Recency-weighted blend:
-  - S_recent = w50*z50 + w100*z100 + w150*z150
-  - Initial weights (tunable): w50=0.6, w100=0.3, w150=0.1
+  - S_recent = w50*z50 + w100*z100 + w250*z250
+  - Initial weights (tunable): w50=0.5, w100=0.3, w250=0.2
 - Apply to SaberSim median P_base:
   - P_adj = P_base * (1 + k * S_recent)
-  - Cap |k * S_recent| to ≤ cap (default cap ±0.20)
+  - Cap |k * S_recent| to ≤ cap (default cap ±0.05 for MVP)
 - Minimum sample thresholds per window (e.g., hitters PA≥40; pitchers IP≥10). Below thresholds: down-weight or skip window.
+- Skip adjustments if overall history insufficient.
+
+Notes:
+- Start with xwOBA for hitters; later include wOBA, Barrel%, HardHit%, K%, BB%, Contact%.
+- For pitchers, aim for K-BB%, CSW%, GB%, Barrel% allowed, IP recency when available.
 
 ## Platform Adjustments
 
@@ -141,16 +146,56 @@ _data/sabersim_2025/<site>/<mmdd>_<slate>/atoms_output/
 
 **Note:** Extraction code is still being improved, so some tables may not be perfect yet.
 
-## Outputs
-- `_data/win_calc/output/<site>/<mmdd>_<slate>/projections_adj.json`
-- `_data/win_calc/export/<site>/<mmdd>_<slate>/<site>_upload.csv`
+## Data Flow and Directories
+- Code: `src/win_calc/`
+- Working data: `_data/win_calc/`
+- Outputs: `_data/win_calc/output/<site>/<mmdd>_<slate>/projections_adj.json`
+- Exports: `_data/win_calc/export/<site>/<mmdd>_<slate>/<site>_upload.csv`
 
-## CLI (planned)
-- `python src/win_calc/run_adj.py --site draftkings --date 0813 --slate main_slate --export`
+Inputs → win_calc → Outputs → Exports
+
+## CLI (win_calc)
+- Script: `src/win_calc/run_adj.py`
+- Example:
+  - `python src/win_calc/run_adj.py --site fanduel --date 0813 --slate main_slate --export`
+- Key args:
+  - `--site {draftkings,fanduel}`
+  - `--date MMDD`
+  - `--slate <name>` (default `main_slate`)
+  - `--k <float>` aggressiveness (default 0.15)
+  - `--cap <float>` max fractional tilt (default 0.20)
+  - `--export` write upload CSV
+
+## Output Contracts
+- JSON: adjusted projections with metadata, for auditing and downstream use.
+- CSV (upload-ready): columns initially include
+  - `site, slate, player_id, player_name, team, pos, salary, projection_adj`
+  - Future: exposure controls, lock/fade flags.
+- Upload paths (conventional):
+  - DK: `/mnt/storage_fast/workspaces/red_ocean/dfs_1/entries/dk_upload.csv`
+  - FD: `/mnt/storage_fast/workspaces/red_ocean/dfs_1/entries/fd_upload.csv`
+
+## Phase 2+ (Augmentations)
+- Incorporate Statcast granular signals (EV/LA distributions, batted ball quality, pitch metrics).
+- Context layers: opponent strength, park factors, handedness splits.
+- Histogram-derived stability and upside indicators.
+- Nonlinear/bounded transforms (e.g., exp(k*clip(S, -c, c))).
+
+## Backtesting & Tuning
+- Metrics: RMSE, calibration, contest ROI/profit metrics.
+- Procedures: rolling-origin, OOS validation; grid/Bayesian tuning for (k, weights, caps, thresholds).
+- Guard against overfitting via temporal splits and nested CV where practical.
 
 ## Utilities
 - `starters.py`: load starter pitchers and batter starters (bat_order_visible > 0) for a site/slate.
-- `platforms.py`: DK/FD metadata (salary cap, roster slots, CSV headers, upload filename).
+- `platforms.py`: DK/FD metadata (salary cap, roster slots, CSV headers, upload filename, scoring multipliers).
 - `exporter.py`: write per-site upload CSVs using platform metadata.
+- `rolling_adjuster.py`: calculate event-based rolling window adjustments.
+
+## Milestones
+1) Ship MVP: precomputed windows → S_recent → P_adj → JSON + CSV export.
+2) Add stability: thresholds, shrinkage improvements, caps finalized.
+3) Expand metric set; add pitcher pathway.
+4) Platform-specific adjustments based on scoring differences.
 
 This module is designed to be parameterized so we can iterate on weights and caps quickly.
