@@ -33,7 +33,8 @@ class MLBConfig:
         'conservative': {'max_workers': 3, 'request_delay': 0.1},
         'balanced': {'max_workers': 5, 'request_delay': 0.05},
         'aggressive': {'max_workers': 8, 'request_delay': 0.02},
-        'ultra_aggressive': {'max_workers': 12, 'request_delay': 0.01}
+        'ultra_aggressive': {'max_workers': 12, 'request_delay': 0.01},
+        'super_aggressive': {'max_workers': 20, 'request_delay': 0.005}
     }
 
     # Default performance profile

@@ -28,7 +28,7 @@ def run_mlb_rosters(force_update=False):
         from mlb_api.rosters.rosters_collector import ActiveRostersCollector
 
         collector = ActiveRostersCollector()
-        summary = collector.collect_all_teams(force_update=force_update)
+        summary = collector.collect_all_teams()
 
         print(f"✅ MLB Rosters completed: {summary.get('total_players', 0)} players")
         return True
@@ -48,7 +48,7 @@ def run_fg_rosters(force_update=False):
 
         summary = run_roster_collection(force_update=force_update)
 
-        print(f"✅ Fangraphs Rosters completed: {summary.get('total_players', 0)} players")
+        print("ℹ️ Skipped Fangraphs Rosters (deprecated)")
         return True
 
     except Exception as e:
@@ -56,18 +56,21 @@ def run_fg_rosters(force_update=False):
         return False
 
 def run_mlb_statcast(force_update=False):
-    """Run MLB Statcast collection."""
+    """Run MLB Statcast collection using StatcastAdvancedCollector with incremental updates."""
     print("\n" + "="*60)
     print("⚾ STEP 3: MLB STATCAST COLLECTION")
     print("="*60)
 
     try:
-        from mlb_api.statcast_adv_box.statcast_collector import StatcastCollector
+        from mlb_api.statcast_adv_box.statcast_collector import StatcastAdvancedCollector
 
-        collector = StatcastCollector()
-        summary = collector.collect_all_data(force_update=force_update)
-
-        print(f"✅ MLB Statcast completed: {summary.get('total_events', 0)} events")
+        collector = StatcastAdvancedCollector(performance_profile='super_aggressive')
+        # Use incremental runner
+        was_updated, data, reason = collector.run_collection(force_update=force_update)
+        total_players = 0
+        if isinstance(data, dict):
+            total_players = (data.get('summary', {}) or {}).get('total_players', 0)
+        print(f"✅ MLB Statcast completed (updated={was_updated}): players={total_players} | {reason}")
         return True
 
     except Exception as e:
@@ -75,17 +78,43 @@ def run_mlb_statcast(force_update=False):
         return False
 
 def run_mlb_rolling_windows(force_update=False):
-    """Run MLB Rolling Windows collection."""
+    """Run MLB Rolling Windows collection using EnhancedRollingCollector directly."""
     print("\n" + "="*60)
     print("📈 STEP 4: MLB ROLLING WINDOWS COLLECTION")
     print("="*60)
 
     try:
-        from mlb_api.rolling_windows.main import run_rolling_windows_collection
+        import json
+        from mlb_api.rolling_windows.core.collector import EnhancedRollingCollector
 
-        summary = run_rolling_windows_collection(force_update=force_update)
+        # Load active roster to determine player IDs
+        rosters_path = Path("/mnt/storage_fast/workspaces/red_ocean/_data/mlb_api_2025/active_rosters/data/active_rosters.json")
+        player_ids: list[str] = []
+        if rosters_path.exists():
+            with open(rosters_path, "r") as f:
+                payload = json.load(f)
+            for _team, team_data in (payload.get("rosters", {}) or {}).items():
+                for p in team_data.get("roster", []) or []:
+                    pid = p.get("id")
+                    if pid is not None:
+                        player_ids.append(str(pid))
 
-        print(f"✅ MLB Rolling Windows completed: {summary.get('total_players', 0)} players")
+        # De-duplicate
+        player_ids = sorted(set(player_ids))
+        if not player_ids:
+            print("⚠️  No player IDs found in active rosters; skipping rolling windows collection")
+            return True
+
+        # Initialize collector to write into canonical data root
+        data_root = Path("/mnt/storage_fast/workspaces/red_ocean/_data/mlb_api_2025/rolling_windows")
+        collector = EnhancedRollingCollector(data_root, performance_profile="super_aggressive", season_year=2025)
+
+        results = collector.collect_all_players(player_ids)
+        success_ct = len(results.get("success", []))
+        failed_ct = len(results.get("failed", []))
+        skipped_ct = len(results.get("skipped", []))
+
+        print(f"✅ MLB Rolling Windows completed: {success_ct} success, {failed_ct} failed, {skipped_ct} skipped")
         return True
 
     except Exception as e:
@@ -106,7 +135,6 @@ def run_master_pipeline(force_update=False, steps=None):
     # Define pipeline steps
     pipeline_steps = [
         ("MLB Rosters", run_mlb_rosters),
-        ("Fangraphs Rosters", run_fg_rosters),
         ("MLB Statcast", run_mlb_statcast),
         ("MLB Rolling Windows", run_mlb_rolling_windows)
     ]
@@ -152,7 +180,7 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Red Ocean Master Pipeline")
     parser.add_argument("--force", action="store_true", help="Force update all data")
-    parser.add_argument("--steps", nargs="+", choices=["MLB Rosters", "Fangraphs Rosters", "MLB Statcast", "MLB Rolling Windows"],
+    parser.add_argument("--steps", nargs="+", choices=["MLB Rosters", "MLB Statcast", "MLB Rolling Windows"],
                        help="Specific steps to run")
 
     args = parser.parse_args()

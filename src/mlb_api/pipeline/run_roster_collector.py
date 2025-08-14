@@ -34,40 +34,25 @@ logger = logging.getLogger(__name__)
 
 def check_status():
     """Check active rosters update status."""
-    print("🔍 Active Rosters Status Check...")
-
-    collector = ActiveRostersCollector()
-
-    # Check hash information
-    hash_info = collector.updater.get_hash_info()
-
-    if hash_info:
-        # Handle both timestamp formats
-        current_hash = hash_info.get('current_hash', {})
-        timestamp = current_hash.get('timestamp') or hash_info.get('last_update')
-        data_size = current_hash.get('data_size', 0)
-
-        if timestamp:
-            last_update = datetime.fromisoformat(timestamp.replace('Z', '+00:00') if timestamp.endswith('Z') else timestamp)
+    print("🔍 Active Rosters Status Check (simplified)...")
+    path = Path('/mnt/storage_fast/workspaces/red_ocean/_data/mlb_api_2025/active_rosters/data/active_rosters.json')
+    if not path.exists():
+        print("❓ No data file found - collection needed")
+        return True
+    try:
+        import json
+        with open(path, 'r') as f:
+            data = json.load(f)
+        ts = data.get('metadata', {}).get('collection_timestamp')
+        if ts:
+            last_update = datetime.fromisoformat(ts)
             hours_since = (datetime.now() - last_update).total_seconds() / 3600
-
             print(f"📅 Last Update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"⏰ Hours Since: {hours_since:.1f}h")
-            print(f"📊 Data Size: {hash_info.get('data_size', 0):,} bytes")
-
-            # Rosters change less frequently - 24 hour threshold
-            if hours_since < 24:
-                print("✅ Rosters are current (< 24 hours)")
-                return False
-            else:
-                print("⚠️ Rosters need refresh (> 24 hours)")
-                return True
-        else:
-            print("❓ No timestamp found")
-            return True
-    else:
-        print("❓ No hash data found - full collection needed")
-        return True
+            return hours_since >= 24
+    except Exception:
+        pass
+    return True
 
 
 def run_collection(force_update=False, max_workers=12):
@@ -77,40 +62,28 @@ def run_collection(force_update=False, max_workers=12):
     print(f"🚀 Active Rosters Collection - {'FORCED' if force_update else 'SMART'}")
 
     try:
-        # Initialize collector with ultra-aggressive settings
-        collector = ActiveRostersCollector(
-            max_workers=max_workers,
-            request_delay=0.01  # Ultra-aggressive delay
-        )
-
-        # Run collection with incremental logic
-        was_updated, data, reason = collector.run_collection(force_update=force_update)
+        collector = ActiveRostersCollector(max_workers=max_workers, request_delay=0.01)
+        data = collector.collect_all_teams()
 
         execution_time = time.time() - start_time
 
-        if was_updated:
-            rosters = data.get('rosters', {})
-            total_teams = len(rosters)
-            total_players = sum(len(team_data.get('roster', [])) for team_data in rosters.values())
+        rosters = data.get('rosters', {})
+        total_teams = len(rosters)
+        total_players = sum(len(team_data.get('roster', [])) for team_data in rosters.values())
 
-            print(f"✅ Collection completed in {execution_time:.1f}s")
-            print(f"⚾ Teams: {total_teams}")
-            print(f"👥 Total Players: {total_players}")
-            print(f"💡 Reason: {reason}")
+        print(f"✅ Collection completed in {execution_time:.1f}s")
+        print(f"⚾ Teams: {total_teams}")
+        print(f"👥 Total Players: {total_players}")
 
-            # Show some team details
-            if rosters:
-                print("📋 Sample Teams:")
-                for i, (team_abbr, team_data) in enumerate(list(rosters.items())[:5]):
-                    roster_size = len(team_data.get('roster', []))
-                    print(f"   {team_abbr}: {roster_size} players")
+        # Show some team details
+        if rosters:
+            print("📋 Sample Teams:")
+            for i, (team_abbr, team_data) in enumerate(list(rosters.items())[:5]):
+                roster_size = len(team_data.get('roster', []))
+                print(f"   {team_abbr}: {roster_size} players")
 
-                if total_teams > 5:
-                    print(f"   ... and {total_teams - 5} more teams")
-
-        else:
-            print(f"⏭️ No updates needed ({execution_time:.1f}s)")
-            print(f"💡 Reason: {reason}")
+            if total_teams > 5:
+                print(f"   ... and {total_teams - 5} more teams")
 
         return True
 

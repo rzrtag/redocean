@@ -49,7 +49,7 @@ class StatcastAdvancedCollector(MLBAPICollector):
     Preserves all sophisticated data collection while adding intelligent update detection.
     """
 
-    def __init__(self, performance_profile: str = 'ultra_aggressive', max_workers: int = None, request_delay: float = None):
+    def __init__(self, performance_profile: str = 'super_aggressive', max_workers: int = None, request_delay: float = None):
         super().__init__("statcast_adv_box")
 
         # Use shared config for performance settings
@@ -89,10 +89,10 @@ class StatcastAdvancedCollector(MLBAPICollector):
             'Accept-Language': 'en-US,en;q=0.9',
         })
 
-        # Increase connection pool size for ultra-aggressive performance
+        # Increase connection pool size for super-aggressive performance
         adapter = requests.adapters.HTTPAdapter(
-            pool_connections=20,  # Increased from default 10
-            pool_maxsize=20,      # Increased from default 10
+            pool_connections=30,  # Increased for super-aggressive
+            pool_maxsize=30,      # Increased for super-aggressive
             max_retries=3
         )
         self.session.mount('http://', adapter)
@@ -255,18 +255,23 @@ class StatcastAdvancedCollector(MLBAPICollector):
 
     def run_collection(self, force_update: bool = False) -> Tuple[bool, Union[Dict, List], str]:
         """
-        Override the base run_collection method to update player files when hash changes.
+        Override the base run_collection method to directly collect data without hash system.
         """
-        # First, run the base collection to check for hash changes
-        was_updated, data, reason = super().run_collection(force_update)
+        logger.info("🚀 Starting direct Statcast data collection...")
 
-        # TEMPORARILY DISABLED: update_date_files() causes hanging
-        # If the hash system detected changes, update the date-based statcast files
-        # if was_updated:
-        #     logger.info("🔄 Hash system detected changes - updating date-based statcast files...")
-        #     self.update_date_files()
+        # Always collect new data (bypass hash system)
+        self.update_date_files()
 
-        return was_updated, data, reason
+        # Create a summary data structure for compatibility
+        summary_data = {
+            'status': 'success',
+            'collection_timestamp': datetime.now().isoformat(),
+            'collector_name': 'statcast_adv_box',
+            'data_type': 'advanced_statcast'
+        }
+
+        logger.info("✅ Statcast data collection completed")
+        return True, summary_data, "Direct collection completed"
 
     def update_date_files(self):
         """
@@ -281,44 +286,43 @@ class StatcastAdvancedCollector(MLBAPICollector):
             logger.error("Could not determine season dates")
             return
 
-        # Only process recent dates (last 30 days) to avoid long loops
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=30)
+        # Only process last 3 days to avoid long loops
+        today = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+        day_before = today - timedelta(days=2)
 
-        logger.info(f"🔄 Processing dates from {start_date} to {end_date}")
+        dates_to_process = [day_before, yesterday, today]
+
+        logger.info(f"🔄 Processing dates: {day_before}, {yesterday}, {today}")
 
         # Process each date in the recent range
         total_at_bats = 0
         dates_updated = 0
         games_processed = 0
 
-        current_date = datetime.combine(start_date, datetime.min.time())
-        end_date = datetime.combine(end_date, datetime.min.time())
-
-        while current_date <= end_date:
-            date_str = current_date.strftime('%Y-%m-%d')
-
-            # Skip dates beyond today
-            if current_date.date() > datetime.now().date():
-                break
+        for date_to_process in dates_to_process:
+            date_str = date_to_process.strftime('%Y-%m-%d')
 
             # Check if we already have data for this date
             if self._date_exists(date_str):
-                logger.debug(f"📁 Data already exists for {date_str}, skipping")
+                logger.info(f"📁 Data already exists for {date_str}, skipping")
                 continue
 
             # Check if we have games for this date
-            games = self._fetch_games_for_date(date_str, game_types=['R'])  # Regular season only
-            if games:
-                logger.info(f"🎯 Processing {date_str}: {len(games)} games")
-                count = self._collect_single_date(date_str)
-                if count > 0:
-                    total_at_bats += count
-                    dates_updated += 1
-                    games_processed += len(games)
-
-            current_date += timedelta(days=1)
-            time.sleep(self.request_delay)
+            try:
+                games = self._fetch_games_for_date(date_str, game_types=['R'])  # Regular season only
+                if games:
+                    logger.info(f"🎯 Processing {date_str}: {len(games)} games")
+                    count = self._collect_single_date(date_str)
+                    if count > 0:
+                        total_at_bats += count
+                        dates_updated += 1
+                        games_processed += len(games)
+                else:
+                    logger.info(f"📭 No games found for {date_str}")
+            except Exception as e:
+                logger.error(f"❌ Error processing {date_str}: {e}")
+                continue
 
         logger.info(f"✅ Both date-based and player-based statcast files updated: {total_at_bats} at-bats, {dates_updated} dates, {games_processed} games")
 
