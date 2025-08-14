@@ -31,134 +31,126 @@ Useful historical docs (reference only): `docs/old/fantasy_points_guide.md`, `do
   - P_adj = P_base * (1 + k * S_recent)
   - Cap |k * S_recent| to ≤ cap (default cap ±0.20)
 - Minimum sample thresholds per window (e.g., hitters PA≥40; pitchers IP≥10). Below thresholds: down-weight or skip window.
-- Skip adjustments if overall history insufficient.
 
-Notes:
-- Start with xwOBA for hitters; later include wOBA, Barrel%, HardHit%, K%, BB%, Contact%.
-- For pitchers, aim for K-BB%, CSW%, GB%, Barrel% allowed, IP recency when available.
+## Platform Adjustments
 
-## Phase 2+ (Augmentations)
-- Incorporate Statcast granular signals (EV/LA distributions, batted ball quality, pitch metrics).
-- Context layers: opponent strength, park factors, handedness splits.
-- Histogram-derived stability and upside indicators.
-- Nonlinear/bounded transforms (e.g., exp(k*clip(S, -c, c))).
+### DraftKings vs FanDuel Scoring Differences
 
-## Data Flow and Directories
-- Code: `src/win_calc/`
-- Working data: `_data/win_calc/`
-- Outputs: `_data/win_calc/output/<site>/<mmdd>_<slate>/projections_adj.json`
-- Exports: `_data/win_calc/export/<site>/<mmdd>_<slate>/<site>_upload.csv`
+**DraftKings (Power-Heavy Scoring):**
+- **Home Runs**: 14 points (massive value)
+- **RBIs**: 2 points
+- **Runs**: 2 points  
+- **Stolen Bases**: 5 points
+- **Pitcher Strikeouts**: 2.25 points
+- **Pitcher Innings**: 2.25 points
+- **Pitcher Wins**: 4 points
+- **Pitcher Earned Runs**: -2 points
 
-Inputs → win_calc → Outputs → Exports
+**FanDuel (Stack Correlation Focus):**
+- **Home Runs**: 6 points (moderate value)
+- **RBIs**: 3.5 points (higher than DK)
+- **Runs**: 3.2 points (higher than DK)
+- **Stolen Bases**: 6 points
+- **Pitcher Strikeouts**: 4 points
+- **Pitcher Innings**: 3 points
+- **Pitcher Wins**: 6 points
+- **Pitcher Earned Runs**: -3 points
 
-## CLI (win_calc)
-- Script: `src/win_calc/run_adj.py`
-- Example:
-  - `python src/win_calc/run_adj.py --site fanduel --date 0813 --slate main_slate --export`
-- Key args:
-  - `--site {draftkings,fanduel}`
-  - `--date MMDD`
-  - `--slate <name>` (default `main_slate`)
-  - `--k <float>` aggressiveness (default 0.15)
-  - `--cap <float>` max fractional tilt (default 0.20)
-  - `--export` write upload CSV
+### Strategic Implications
 
-## Output Contracts
-- JSON: adjusted projections with metadata, for auditing and downstream use.
-- CSV (upload-ready): columns initially include
-  - `site, slate, player_id, player_name, team, pos, salary, projection_adj`
-  - Future: exposure controls, lock/fade flags.
-- Upload paths (conventional):
-  - DK: `/mnt/storage_fast/workspaces/red_ocean/dfs_1/entries/dk_upload.csv`
-  - FD: `/mnt/storage_fast/workspaces/red_ocean/dfs_1/entries/fd_upload.csv`
+**DraftKings Strategy:**
+- **Power hitters** get massive boost (HR = 14 points)
+- **Stack correlation** less important due to balanced R/RBI scoring
+- **Pitchers** need K/IP efficiency (2.25 points each)
+- **Focus**: Individual power upside over team correlation
 
-## Platform Adjustments (DK vs FD)
-Platform differences must be respected end-to-end.
+**FanDuel Strategy:**
+- **Stack correlation** critical (R/RBI worth more than HR)
+- **Power hitters** less dominant (HR = 6 points)
+- **Pitchers** need volume (IP = 3, K = 4 points)
+- **Focus**: Team offensive production over individual power
 
-- Scoring systems: DK and FD award different fantasy points for events. Until we port scoring tables, we adjust the site-specific SaberSim median directly (already expressed in the site’s FP units). No cross-site mixing.
-- CSV schemas: Upload column names and formats can differ by platform; we will maintain per-site exporters (`dk_upload.csv`, `fd_upload.csv`).
-- Roster/constraints & salary caps: Used downstream for portfolio optimization; keep site metadata available alongside projections.
-- Implementation plan:
-  1) Centralize platform metadata in `win_calc` (site id, scoring version tag, CSV schema hints, salary cap, roster constraints).
-  2) Ensure the adjustment path always uses site-scoped inputs and writes site-scoped outputs.
-  3) Later, port exact scoring rules from `docs/old/fantasy_points_guide.md` and `docs/old/dk_vs_fd.md` into code to support statline-to-FP recalculation if needed for backtests.
-  4) Validate export files with small test uploads on each platform.
+### Implementation Plan
 
-References for porting (to be codified soon):
-- `docs/old/fantasy_points_guide.md` — event scoring
-- `docs/old/dk_vs_fd.md` — platform differences
-- `docs/old/platform_adj.md` — prior platform adjustment notes
+1. **Platform-Specific Adjustments:**
+   - DK: Boost power hitters (high barrel%, exit velocity)
+   - FD: Boost stack correlation (R/RBI production)
+   - Pitchers: DK favors efficiency, FD favors volume
 
-## Backtesting & Tuning
-- Metrics: RMSE, calibration, contest ROI/profit metrics.
-- Procedures: rolling-origin, OOS validation; grid/Bayesian tuning for (k, weights, caps, thresholds).
-- Guard against overfitting via temporal splits and nested CV where practical.
+2. **Scoring Multipliers:**
+   ```python
+   DK_MULTIPLIERS = {
+       "hr": 14, "rbi": 2, "r": 2, "sb": 5,
+       "k": 2.25, "ip": 2.25, "w": 4, "er": -2
+   }
+   FD_MULTIPLIERS = {
+       "hr": 6, "rbi": 3.5, "r": 3.2, "sb": 6,
+       "k": 4, "ip": 3, "w": 6, "er": -3
+   }
+   ```
 
-## Milestones
-1) Ship MVP: precomputed windows → S_recent → P_adj → JSON + CSV export.
-2) Add stability: thresholds, shrinkage improvements, caps finalized.
-3) Expand metric set; add pitcher pathway.
-4) Add context (park/opponent/handedness) and histogram features.
-5) Build backtesting harness; refine weights.
-6) Optional automation: rerun SaberSim after uploads.
+3. **Adjustment Logic:**
+   - Apply rolling window adjustments first
+   - Then apply platform-specific scoring adjustments
+   - DK: Emphasize power metrics in final projection
+   - FD: Emphasize run production metrics in final projection
 
-## FAQs
-- What is MVP? Minimum Viable Product — the smallest end-to-end version that delivers value and lets us iterate safely.
-- Why precomputed windows first? They’re already collected daily, enabling a fast path to a working pipeline.
-- How do we treat projected vs confirmed lineups? Treat `bat_order_visible > 0` as starters (projected or confirmed). Update as confirmations roll in; adjustments apply in either case.
+## SaberSim Dataset Layout
 
-## SaberSim Dataset Layout (per site/slate)
-Base directory example (FanDuel main slate on 08/13):
-`_data/sabersim_2025/fanduel/0813_main_slate`
+### Directory Structure
+```
+_data/sabersim_2025/<site>/<mmdd>_<slate>/atoms_output/
+├── atoms/           # Raw extracted atoms
+├── metadata/        # HAR metadata and extraction info
+├── tables/          # Processed tables
+│   ├── players.json     # Player projections and info
+│   ├── games.json       # Game info and starters
+│   ├── starters.json    # DEPRECATED - will be removed
+│   └── ...
+└── tables_analysis/ # Analysis outputs
+```
 
-- `atoms_output/`
-  - `atoms/`
-    - `build_optimization.json`: Latest build optimization configuration/results snapshot.
-    - `contest_information.json`: Contest listings, sizes, payouts, metadata.
-    - `contest_simulations_<bucket>.json`: Contest-level simulation results for a specific bucket (e.g., `flagship_mid_entry`).
-    - `field_lineups_<bucket>.json`: Field (opponent) lineup samples/flags for a contest bucket.
-  - `metadata/`
-    - `atom_registry.json`: Known atom IDs written during extraction.
-    - `endpoint_mapping.json`: Map of endpoint types to atom IDs.
-    - `extraction_summary.json`: When/what was extracted (mtime, counts, provenance).
-  - `tables/`
-    - `contest_summary.json`: Consolidated summary of contests on the slate.
-    - `games.json`: Per-game slate context (start times, starters, team confirmations, win probs, etc.).
-    - `map_docs.json`: Cross-reference map (players/teams/games) for convenience.
-    - `master_summary.json`: High-level rollup across generated tables.
-    - `players.json`: Player-level table (ids, names, teams, positions, salaries, projections).
-    - `starters.json`: Starter-centric view derived from atoms/tables (batters with `bat_order_visible`, implied SPs).
+### Key Files for Starter Identification
 
-- `tables_analysis/`
-  - `contest_site_summary.json`: Summary of site/slate-level metrics (counts, coverage, timestamps).
-  - `lineup_stats.json`: Aggregate lineup-level statistics derived from tables/atoms.
-  - `pid_own_batters_<bucket>.json`: Batter ownership estimates per player id for a contest bucket.
-  - `pid_own_pitchers_<bucket>.json`: Pitcher ownership estimates per player id for a contest bucket.
-  - `stack_analysis.json`: Stack configuration analysis (team stacks, sizes, efficiency metrics).
-  - `stack_own_<bucket>.json`: Stack ownership estimates for the given contest bucket.
+**`players.json`** - Main player data:
+- `bat_order_visible > 0`: Indicates projected starter (batter)
+- `confirmed: true/false`: Lineup confirmation status
+- `position`: Player position
+- `team`: Team abbreviation
 
-Notes:
-- Buckets (e.g., `flagship_mid_entry`) segment contest types/sizes; multiple bucket files may exist.
-- Starters:
-  - Batters are considered projected/confirmed starters if `bat_order_visible > 0`.
-  - Pitchers are implied via `games.json` (`home_starter`/`away_starter`) and confirmation flags elsewhere; treat implied as starters until proven otherwise.
-- These artifacts refresh as lineups confirm; ADJ should tolerate projected status and update when confirmations arrive.
+**`games.json`** - Game and pitcher data:
+- `home_starter`: Home team starting pitcher
+- `away_starter`: Away team starting pitcher
+- `game_id`: Unique game identifier
 
-### Deprecations and Caveats
-- `starters.json` is deprecated and will no longer be generated; rely on `games.json` (home/away starters) and lineup/players tables (`bat_order_visible > 0`) for starter inference.
-- Extraction and analysis tables are improving: while we’ve structured the HAR extraction to be augmentation-friendly and aligned with upload schemas, some tables/analyses may still evolve. Expect iterative refinements to naming, coverage, and derived fields.
+**`starters.json`** - DEPRECATED:
+- Will be removed from SaberSim source code
+- Starter info now derived from `games.json` and `players.json`
 
-## Starter Identification Sources (Daily Contests)
-We only analyze starters (bench excluded).
+### Starter Inference Rules
 
-- Pitchers (projected/confirmed)
-  - Primary: `_data/sabersim_2025/<site>/<mmdd>_<slate>/atoms_output/tables/starters.json` (contains projected and/or confirmed SPs).
-  - Fallback: `games.json` (`home_starter`/`away_starter`) when needed.
-- Batters (projected/confirmed)
-  - Use `players.json`; treat players with `bat_order_visible > 0` as starters (projected if not yet confirmed).
-  - The `confirmed` flag in `players.json` indicates lineup confirmation when available.
+**Batters (Starters):**
+- `bat_order_visible > 0` in `players.json`
+- `confirmed: true` indicates lineup is confirmed
+- Exclude bench players (`bat_order_visible = 0`)
 
-Rules:
-- Exclude any player with `bat_order_visible == 0` (bench).
-- Prefer confirmed data when present; otherwise, proceed with projected starters until updated.
-- Rookie/call-up pathway: still no adjustment if insufficient history (per MVP rules).
+**Pitchers (Starters):**
+- Listed in `games.json` as `home_starter` or `away_starter`
+- Projected starters even if not confirmed
+- Focus on daily contests only
+
+**Note:** Extraction code is still being improved, so some tables may not be perfect yet.
+
+## Outputs
+- `_data/win_calc/output/<site>/<mmdd>_<slate>/projections_adj.json`
+- `_data/win_calc/export/<site>/<mmdd>_<slate>/<site>_upload.csv`
+
+## CLI (planned)
+- `python src/win_calc/run_adj.py --site draftkings --date 0813 --slate main_slate --export`
+
+## Utilities
+- `starters.py`: load starter pitchers and batter starters (bat_order_visible > 0) for a site/slate.
+- `platforms.py`: DK/FD metadata (salary cap, roster slots, CSV headers, upload filename).
+- `exporter.py`: write per-site upload CSVs using platform metadata.
+
+This module is designed to be parameterized so we can iterate on weights and caps quickly.
