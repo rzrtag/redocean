@@ -1,0 +1,21 @@
+{
+  "timestamp": "2025-08-16T01:26:22.233649",
+  "summary": {
+    "total_checks": 1,
+    "valid_checks": 1,
+    "invalid_checks": 0,
+    "error_count": 0,
+    "warning_count": 0,
+    "success_rate": 100.0
+  },
+  "check_types": {
+    "rolling_data_quality": {
+      "total": 1,
+      "valid": 1,
+      "invalid": 0,
+      "success_rate": 100.0
+    }
+  },
+  "errors": [],
+  "warnings": []
+}
