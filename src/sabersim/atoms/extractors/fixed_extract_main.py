@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Run HAR Extraction and Table Creation
+Fixed SaberSim HAR Extraction - Main Logic
 
-Simple script to extract data from SaberSim HAR files and create tables.
-Uses the working archived logic with proper site detection and slate detection.
+This fixes the grouping issue by processing all entries for a site together,
+rather than splitting by contest buckets which was causing endpoint loss.
 """
 
 import sys
@@ -12,6 +12,7 @@ from datetime import datetime
 import json
 import re
 from urllib.parse import urlparse, parse_qs
+from collections import defaultdict
 
 # Add the current directory to the path so we can import our modules
 sys.path.insert(0, str(Path(__file__).parent))
@@ -163,69 +164,15 @@ def detect_site_from_entry(entry: dict) -> str | None:
     return None
 
 
-def detect_contest_bucket(entry: dict) -> str | None:
-    """Extract a stable contest bucket identifier if present."""
-    try:
-        req = entry.get('request', {})
-        # POST json
-        if req.get('method') == 'POST':
-            post = req.get('postData', {})
-            if post.get('mimeType') == 'application/json':
-                try:
-                    body = json.loads(post.get('text', '{}'))
-                    # Common keys observed
-                    bucket = body.get("contest_bucket") or body.get("contestType") or body.get("contest_bucket_name")
-                    if bucket:
-                        # Normalize typical pattern 'uuid_flagship_mid_entry' → 'flagship_mid_entry'
-                        b = str(bucket)
-                        parts = b.split("_")
-                        if len(parts) > 2:
-                            return "_".join(parts[1:])
-                        return b
-                except Exception:
-                    pass
-    except Exception:
-        return None
-    return None
-
-
-def detect_slate_from_entries(entries: list, site: str, bucket: str = None) -> str:
-    """Detect slate from HAR entries."""
-    slate_hints = {}
-
-    for entry in entries:
-        try:
-            req = entry.get("request", {})
-            url = (req.get("url") or "").lower()
-            text = ""
-            if req.get("method") == "POST":
-                post = req.get("postData", {})
-                if post.get("mimeType") == "application/json":
-                    text = (post.get("text") or "").lower()
-
-            blob = (url + "\n" + text).lower()
-
-            # Prefer explicit night indicators; avoid matching 'latest'
-            if ("night_slate" in blob) or ("late-night" in blob) or re.search(r"\bnight\b", blob):
-                slate_hints[(site, bucket)] = "night_slate"
-            elif "main_slate" in blob or "main-slate" in blob:
-                slate_hints[(site, bucket)] = "main_slate"
-            # Else leave unset; default later is main_slate
-        except Exception:
-            pass
-
-    return slate_hints.get((site, bucket), "main_slate")
-
-
 def main():
-    """Main function to run HAR extraction."""
-
+    """Main function to run HAR extraction with FIXED grouping logic."""
+    
     # Check if HAR file path is provided
     if len(sys.argv) < 2:
-        print("Usage: python run_har_extraction.py <path_to_har_file> [output_directory]")
+        print("Usage: python fixed_extract_main.py <path_to_har_file> [output_directory]")
         print("\nExample:")
-        print("  python run_har_extraction.py ../../dfs/app.sabersim.com")
-        print("  python run_har_extraction.py ../../dfs/app.sabersim.com ./output")
+        print("  python fixed_extract_main.py ../../dfs/app.sabersim.com")
+        print("  python fixed_extract_main.py ../../dfs/app.sabersim.com ./output")
         sys.exit(1)
 
     har_file = sys.argv[1]
@@ -245,7 +192,7 @@ def main():
         print(f"❌ Error: HAR file not found: {har_file}")
         sys.exit(1)
 
-    print(f"🚀 Starting HAR extraction...")
+    print(f"🚀 Starting FIXED HAR extraction...")
     print(f"📁 HAR file: {har_path}")
 
     # Load HAR entries for analysis
@@ -276,12 +223,12 @@ def main():
 
     print(f"📂 Output directory: {output_dir}")
 
-    # Group entries by site and contest bucket
+    # FIXED: Group entries by site only (not by site + bucket)
     from collections import defaultdict
-    groups = defaultdict(lambda: defaultdict(list))
+    site_groups = defaultdict(list)
 
     site_counts = {"draftkings": 0, "fanduel": 0, None: 0}
-    bucket_counts = {}
+    endpoint_counts = defaultdict(int)
 
     for entry in entries:
         # Only process successful responses
@@ -292,81 +239,77 @@ def main():
         site_entry = detect_site_from_entry(entry)
         site_counts[site_entry if site_entry in ("draftkings", "fanduel") else None] += 1
 
-        # Process all entries that have site detection OR are general SaberSim endpoints
-        if site_entry:
-            # Site-specific entries (draftkings/fanduel)
-            bucket = detect_contest_bucket(entry)
-            groups[site_entry][bucket].append(entry)
-        else:
-            # General SaberSim endpoints - check if they match MLB patterns
-            url = entry.get("request", {}).get("url", "")
-            if any(pattern in url for pattern in [
-                "/api/v1/lineups",
-                "/https-dripRequest",
-                "/solve-portfolio",
-                "/api/v1/contests/mlb",
-                "/initiate-user-contest-sim",
-                "/select-pool-lineups-gen2",
-                "/get_player_projections",
-                "/endpoints/lifesaber/build",
-                "get-contest-lineups"
-            ]):
-                # Add to both sites since these are general endpoints
-                for site in ["draftkings", "fanduel"]:
-                    bucket = "general"  # Use a general bucket for these
-                    groups[site][bucket].append(entry)
+        # If we can't detect site from entry, skip it (don't fall back to global)
+        if not site_entry:
+            continue
 
-        # Count buckets (only for site-specific entries)
-        if site_entry:
-            bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        # FIXED: Group by site only, not by site + bucket
+        site_groups[site_entry].append(entry)
+
+        # Count endpoint types for analysis
+        url = entry.get("request", {}).get("url", "")
+        if "contest_simulations" in url:
+            endpoint_counts["contest_simulations"] += 1
+        elif "contest_information" in url:
+            endpoint_counts["contest_information"] += 1
+        elif "field_lineups" in url:
+            endpoint_counts["field_lineups"] += 1
+        elif "build_optimization" in url:
+            endpoint_counts["build_optimization"] += 1
+        elif "portfolio_optimization" in url:
+            endpoint_counts["portfolio_optimization"] += 1
+        elif "progress_tracking" in url:
+            endpoint_counts["progress_tracking"] += 1
+        elif "lineup_data" in url:
+            endpoint_counts["lineup_data"] += 1
 
     print(f"📊 Site detection counts: {site_counts}")
-    print(f"📊 Unique buckets: {sum(1 for _ in bucket_counts.keys())}")
+    print(f"📊 Endpoint counts: {dict(endpoint_counts)}")
 
     total_atoms = 0
-    group_count = 0
+    site_count = 0
 
-    for site_entry, bucket_map in groups.items():
-        for bucket, ents in bucket_map.items():
-            group_count += 1
+    # FIXED: Process each site as a single group
+    for site_entry, entries in site_groups.items():
+        site_count += 1
 
-                                                            # Use the already-detected slate for data organization
-            slate_suffix = f"_{slate}"  # Always append slate
+        # Use the already-detected slate for data organization
+        slate_suffix = f"_{slate}"  # Always append slate
 
-            # Compute output dir - flat structure with slate
-            base = Path("_data") / "sabersim_2025" / site_entry / f"{date_str}{slate_suffix}"
-            out_dir = base / "atoms_output"
-            out_dir.mkdir(parents=True, exist_ok=True)
+        # Compute output dir - flat structure with slate
+        base = Path("_data") / "sabersim_2025" / site_entry / f"{date_str}{slate_suffix}"
+        out_dir = base / "atoms_output"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-            print(f"🔍 Processing group -> site={site_entry} bucket={bucket} slate={slate} entries={len(ents)} out={out_dir}")
+        print(f"🔍 Processing site -> site={site_entry} slate={slate} entries={len(entries)} out={out_dir}")
 
-            # Build a minimal temporary HAR with only grouped entries
-            temp_har = {"log": {"version": "1.2", "creator": {"name": "red_ocean", "version": "1"}}}
-            temp_har["log"]["entries"] = ents
+        # Build a minimal temporary HAR with all entries for this site
+        temp_har = {"log": {"version": "1.2", "creator": {"name": "red_ocean", "version": "1"}}}
+        temp_har["log"]["entries"] = entries
 
-            # Save temporary HAR
-            import tempfile
-            with tempfile.NamedTemporaryFile("w", suffix=".har", delete=False) as tf:
-                json.dump(temp_har, tf, indent=2)
-                tf.flush()
-                temp_path = Path(tf.name)
+        # Save temporary HAR
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".har", delete=False) as tf:
+            json.dump(temp_har, tf, indent=2)
+            tf.flush()
+            temp_path = Path(tf.name)
 
-            try:
-                # Extract atoms
-                extractor = MLBAtomExtractor(str(out_dir))
-                extracted = extractor.extract_atoms_from_har(str(temp_path))
-                group_atoms = sum(len(v) for v in extracted.values())
-                total_atoms += group_atoms
-                print(f"  ✅ Extracted {group_atoms} atoms")
+        try:
+            # Extract atoms
+            extractor = MLBAtomExtractor(str(out_dir))
+            extracted = extractor.extract_atoms_from_har(str(temp_path))
+            site_atoms = sum(len(v) for v in extracted.values())
+            total_atoms += site_atoms
+            print(f"  ✅ Extracted {site_atoms} atoms")
 
-            except Exception as e:
-                print(f"  ❌ Extraction failed: {e}")
-            finally:
-                # Clean up temp file
-                temp_path.unlink()
+        except Exception as e:
+            print(f"  ❌ Extraction failed: {e}")
+        finally:
+            # Clean up temp file
+            temp_path.unlink()
 
-    print(f"\n✅ Extraction completed!")
-    print(f"📊 Total atoms extracted: {total_atoms} across {group_count} group(s)")
+    print(f"\n✅ FIXED Extraction completed!")
+    print(f"📊 Total atoms extracted: {total_atoms} across {site_count} site(s)")
     print(f"📁 Base output: _data/sabersim_2025/<site>/{date_str}_<slate>/atoms_output")
 
     # Check what was created
